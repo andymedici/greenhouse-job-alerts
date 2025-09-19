@@ -1,0 +1,2 @@
+web: python greenhouse_collector.py
+worker: python greenhouse_collector.py
