@@ -1,2 +1,2 @@
-web: python greenhouse_collector.py
+web: python scheduler.py
 worker: python greenhouse_collector.py
