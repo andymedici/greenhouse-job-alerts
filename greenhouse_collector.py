@@ -1,7 +1,20 @@
 """
-Enhanced Greenhouse Metadata Collector
---------------------------------------
-A robust system for collecting Greenhouse job board tokens with work type classification.
+Enhanced Greenhouse Metadata Collector with Historical Tracking
+--------------------------------------------------------------
+A comprehensive system for collecting Greenhouse job board tokens with:
+- Monthly historical job count tracking
+- Work type classification (remote/hybrid/onsite)
+- Extensive token discovery from 150+ seed URLs
+- Market intelligence and trend analysis
+- Automated email reporting with historical insights
+
+Features:
+- 53 seed tokens for immediate data
+- 150+ discovery URLs for finding new companies
+- Monthly snapshots for trend analysis
+- Smart change detection and historical tracking
+- Email reports with month-over-month comparisons
+- Market intelligence analytics
 """
 
 import requests
@@ -13,7 +26,7 @@ import json
 import logging
 import os
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from configparser import ConfigParser
 from typing import Tuple, List, Optional, Dict, Any
 from urllib.parse import urlparse
@@ -49,7 +62,7 @@ class Config:
             'max_delay': '15',
             'max_retries': '3',
             'timeout': '15',
-            'user_agent': 'TokenCollectorBot/2.0 (Research; contact: researcher@example.com)',
+            'user_agent': 'JobMarketBot/2.0 (Research; contact: researcher@example.com)',
         }
         
         self.config['email'] = {
@@ -63,7 +76,7 @@ class Config:
             'tokens': 'stripe,notion,figma,discord,dropbox,zoom,doordash,instacart,robinhood,coinbase,plaid,openai,anthropic,airbnb,reddit,gitlab,hashicorp,mongodb,elastic,salesforce,snowflake,databricks,atlassian,asana,slack,okta,twilio,brex,mercury,ramp,checkr,chime,affirm,canva,flexport,benchling,retool,vercel,linear,23andme,shopify,tesla,netflix,spotify,unity,cloudflare,docker,intel,nvidia,apple,meta,google,microsoft'
         }
         
-        # Seed URLs for discovering new tokens - comprehensive high-quality list
+        # Comprehensive seed URLs for discovering new tokens
         self.config['seed_urls'] = {
             'urls': '''https://github.com/poteto/hiring-without-whiteboards
 https://github.com/donnemartin/awesome-interview-questions
@@ -280,6 +293,7 @@ class DatabaseManager:
     
     def _init_db(self):
         with self.get_connection() as conn:
+            # Main tokens table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS greenhouse_tokens (
                     token TEXT PRIMARY KEY,
@@ -297,6 +311,36 @@ class DatabaseManager:
                 )
             """)
             
+            # Monthly historical data
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS monthly_job_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token TEXT,
+                    year INTEGER,
+                    month INTEGER,
+                    job_count INTEGER,
+                    remote_count INTEGER,
+                    hybrid_count INTEGER,
+                    onsite_count INTEGER,
+                    snapshot_date TIMESTAMP,
+                    FOREIGN KEY (token) REFERENCES greenhouse_tokens (token)
+                )
+            """)
+            
+            # Discovery tracking
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS discovery_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    url TEXT,
+                    tokens_found INTEGER,
+                    new_tokens INTEGER,
+                    success BOOLEAN,
+                    error_message TEXT,
+                    crawl_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Add new columns to existing tables if they don't exist
             try:
                 conn.execute("ALTER TABLE greenhouse_tokens ADD COLUMN remote_jobs_count INTEGER DEFAULT 0")
                 conn.execute("ALTER TABLE greenhouse_tokens ADD COLUMN hybrid_jobs_count INTEGER DEFAULT 0") 
@@ -304,7 +348,13 @@ class DatabaseManager:
             except sqlite3.OperationalError:
                 pass
             
+            # Create indexes for performance
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_monthly_token_date ON monthly_job_history(token, year, month)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tokens_last_seen ON greenhouse_tokens(last_seen)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_time ON discovery_history(crawl_time)")
+            
             conn.commit()
+            logging.info("Database initialized successfully")
     
     def upsert_token(self, token: str, source: str, company_name: str, 
                     job_count: int, locations: List[str], departments: List[str], 
@@ -351,6 +401,52 @@ class DatabaseManager:
             logging.error(f"Database error for token {token}: {e}")
             return False
     
+    def create_monthly_snapshot(self, token: str, company_name: str, job_count: int, work_type_counts: Dict[str, int]) -> bool:
+        """Create monthly snapshot if this is the first time seeing this company this month."""
+        try:
+            now = datetime.utcnow()
+            
+            with self.get_connection() as conn:
+                # Check if we already have a snapshot for this month
+                cursor = conn.execute("""
+                    SELECT COUNT(*) FROM monthly_job_history 
+                    WHERE token = ? AND year = ? AND month = ?
+                """, (token, now.year, now.month))
+                
+                existing_count = cursor.fetchone()[0]
+                
+                # Create snapshot if this is first time seeing company this month
+                if existing_count == 0:
+                    conn.execute("""
+                        INSERT INTO monthly_job_history 
+                        (token, year, month, job_count, remote_count, 
+                         hybrid_count, onsite_count, snapshot_date)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (token, now.year, now.month, job_count,
+                          work_type_counts.get('remote', 0),
+                          work_type_counts.get('hybrid', 0),
+                          work_type_counts.get('onsite', 0), now))
+                    
+                    conn.commit()
+                    logging.info(f"📅 Monthly snapshot created for {token} - {now.strftime('%B %Y')}")
+                    return True
+                return False
+        except Exception as e:
+            logging.error(f"Error creating monthly snapshot for {token}: {e}")
+            return False
+    
+    def log_discovery(self, url: str, tokens_found: int, new_tokens: int, success: bool, error_message: str = None):
+        """Log URL crawling results."""
+        try:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO discovery_history (url, tokens_found, new_tokens, success, error_message)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (url, tokens_found, new_tokens, success, error_message))
+                conn.commit()
+        except Exception as e:
+            logging.error(f"Failed to log discovery history: {e}")
+    
     def get_all_tokens(self) -> List[sqlite3.Row]:
         try:
             with self.get_connection() as conn:
@@ -365,6 +461,64 @@ class DatabaseManager:
         except Exception as e:
             logging.error(f"Failed to retrieve tokens: {e}")
             return []
+    
+    def get_monthly_trends(self) -> Dict[str, Any]:
+        """Get month-over-month trends for email reporting."""
+        try:
+            with self.get_connection() as conn:
+                now = datetime.utcnow()
+                
+                # Current month totals
+                current_cursor = conn.execute("""
+                    SELECT 
+                        COUNT(*) as companies,
+                        SUM(job_count) as total_jobs,
+                        SUM(remote_count) as remote_jobs,
+                        SUM(hybrid_count) as hybrid_jobs,
+                        SUM(onsite_count) as onsite_jobs
+                    FROM monthly_job_history 
+                    WHERE year = ? AND month = ?
+                """, (now.year, now.month))
+                current = current_cursor.fetchone()
+                
+                # Previous month totals
+                prev_month = now.month - 1 if now.month > 1 else 12
+                prev_year = now.year if now.month > 1 else now.year - 1
+                
+                prev_cursor = conn.execute("""
+                    SELECT 
+                        COUNT(*) as companies,
+                        SUM(job_count) as total_jobs,
+                        SUM(remote_count) as remote_jobs,
+                        SUM(hybrid_count) as hybrid_jobs,
+                        SUM(onsite_count) as onsite_jobs
+                    FROM monthly_job_history 
+                    WHERE year = ? AND month = ?
+                """, (prev_year, prev_month))
+                previous = prev_cursor.fetchone()
+                
+                # New companies this month
+                new_companies_cursor = conn.execute("""
+                    SELECT token, snapshot_date FROM monthly_job_history 
+                    WHERE year = ? AND month = ?
+                    AND token NOT IN (
+                        SELECT DISTINCT token FROM monthly_job_history 
+                        WHERE year = ? AND month = ?
+                    )
+                    ORDER BY snapshot_date
+                """, (now.year, now.month, prev_year, prev_month))
+                new_companies = new_companies_cursor.fetchall()
+                
+                return {
+                    'current': current,
+                    'previous': previous,
+                    'new_companies': new_companies,
+                    'current_month': now.strftime('%B %Y'),
+                    'previous_month': f"{['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][prev_month-1]} {prev_year}"
+                }
+        except Exception as e:
+            logging.error(f"Failed to retrieve monthly trends: {e}")
+            return {}
 
 
 class TokenExtractor:
@@ -406,6 +560,7 @@ class GreenhouseBoardParser:
                 
                 if response.status_code == 429:
                     wait_time = int(response.headers.get('Retry-After', 60))
+                    logging.warning(f"Rate limited for {token}, waiting {wait_time} seconds...")
                     time.sleep(wait_time)
                     continue
                 elif response.status_code == 404:
@@ -529,30 +684,34 @@ class EmailReporter:
         self.smtp_user = smtp_user
         self.smtp_pass = smtp_pass
     
-    def send_summary(self, tokens_data: List[sqlite3.Row], recipient: str) -> bool:
+    def send_summary(self, tokens_data: List[sqlite3.Row], trends_data: Dict[str, Any], recipient: str) -> bool:
         try:
-            if not tokens_data:
-                body = "No tokens collected yet."
-            else:
-                body = self._format_summary(tokens_data)
+            body = self._format_summary(tokens_data, trends_data)
+            html_body = self._format_html_summary(tokens_data, trends_data)
             
-            msg = MIMEText(body)
-            msg["Subject"] = f"Greenhouse Tokens Report - {datetime.utcnow().strftime('%Y-%m-%d')}"
+            msg = MIMEMultipart('alternative')
+            msg["Subject"] = f"📊 Greenhouse Market Intelligence - {datetime.utcnow().strftime('%Y-%m-%d')}"
             msg["From"] = self.smtp_user
             msg["To"] = recipient
+            
+            text_part = MIMEText(body, 'plain')
+            html_part = MIMEText(html_body, 'html')
+            
+            msg.attach(text_part)
+            msg.attach(html_part)
             
             with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
                 server.starttls()
                 server.login(self.smtp_user, self.smtp_pass)
                 server.sendmail(self.smtp_user, recipient, msg.as_string())
             
-            logging.info("Email summary sent successfully")
+            logging.info("📧 Enhanced email summary sent successfully")
             return True
         except Exception as e:
             logging.error(f"Error sending email: {e}")
             return False
     
-    def _format_summary(self, tokens_data: List[sqlite3.Row]) -> str:
+    def _format_summary(self, tokens_data: List[sqlite3.Row], trends_data: Dict[str, Any]) -> str:
         if not tokens_data:
             return "No tokens collected yet."
         
@@ -562,41 +721,211 @@ class EmailReporter:
         total_onsite = sum(row.get('onsite_jobs_count', 0) or 0 for row in tokens_data)
         
         lines = [
-            f"Greenhouse Token Collection Summary",
-            f"=" * 50,
-            f"Total Companies: {len(tokens_data)}",
-            f"Total Jobs: {total_jobs}",
-            f"  Remote: {total_remote} ({total_remote/total_jobs*100:.1f}%)" if total_jobs > 0 else "  Remote: 0",
-            f"  Hybrid: {total_hybrid} ({total_hybrid/total_jobs*100:.1f}%)" if total_jobs > 0 else "  Hybrid: 0", 
-            f"  On-site: {total_onsite} ({total_onsite/total_jobs*100:.1f}%)" if total_jobs > 0 else "  On-site: 0",
-            "",
-            "Company Details:",
-            "=" * 50
+            f"🚀 Greenhouse Market Intelligence Report",
+            f"=" * 60,
+            f"📊 CURRENT MARKET SNAPSHOT",
+            f"Total Companies Tracked: {len(tokens_data)}",
+            f"Total Job Openings: {total_jobs:,}",
+            f"  🏠 Remote: {total_remote:,} ({total_remote/total_jobs*100:.1f}%)" if total_jobs > 0 else "  🏠 Remote: 0",
+            f"  🏢 Hybrid: {total_hybrid:,} ({total_hybrid/total_jobs*100:.1f}%)" if total_jobs > 0 else "  🏢 Hybrid: 0", 
+            f"  🏢 On-site: {total_onsite:,} ({total_onsite/total_jobs*100:.1f}%)" if total_jobs > 0 else "  🏢 On-site: 0",
+            ""
         ]
         
-        for row in tokens_data:
+        # Add trends if available
+        if trends_data and trends_data.get('current') and trends_data.get('previous'):
+            current = trends_data['current']
+            previous = trends_data['previous']
+            
+            if previous['total_jobs'] and previous['total_jobs'] > 0:
+                job_change = current['total_jobs'] - previous['total_jobs']
+                job_change_pct = (job_change / previous['total_jobs']) * 100
+                
+                company_change = current['companies'] - previous['companies']
+                
+                lines.extend([
+                    f"📈 MONTH-OVER-MONTH TRENDS ({trends_data.get('current_month', '')})",
+                    f"Jobs Change: {job_change:+,} ({job_change_pct:+.1f}%) vs {trends_data.get('previous_month', '')}",
+                    f"New Companies Discovered: +{company_change} companies",
+                    ""
+                ])
+                
+                # New companies this month
+                if trends_data.get('new_companies'):
+                    lines.extend([
+                        f"🆕 NEW COMPANIES DISCOVERED THIS MONTH:",
+                        f"Found {len(trends_data['new_companies'])} new companies hiring on Greenhouse",
+                        ""
+                    ])
+        
+        lines.extend([
+            f"🏆 TOP HIRING COMPANIES:",
+            f"=" * 30
+        ])
+        
+        # Sort companies by job count and show top 15
+        sorted_companies = sorted(tokens_data, key=lambda x: x.get('job_count', 0) or 0, reverse=True)
+        for i, row in enumerate(sorted_companies[:15], 1):
             try:
                 job_titles_list = json.loads(row.get('job_titles', '[]')) if row.get('job_titles') else []
             except:
                 job_titles_list = []
             
-            titles_preview = ", ".join(job_titles_list[:3]) + ("..." if len(job_titles_list) > 3 else "")
-            
             remote_count = row.get('remote_jobs_count', 0) or 0
             hybrid_count = row.get('hybrid_jobs_count', 0) or 0
             onsite_count = row.get('onsite_jobs_count', 0) or 0
             
+            titles_preview = ", ".join(job_titles_list[:2]) + ("..." if len(job_titles_list) > 2 else "")
+            
             lines.append(
-                f"{row.get('company_name', 'Unknown')} ({row.get('token', 'unknown')})\n"
-                f"  Total Jobs: {row.get('job_count', 0)}\n"
-                f"  Work Types: Remote:{remote_count} | Hybrid:{hybrid_count} | On-site:{onsite_count}\n"
-                f"  Locations: {row.get('locations', 'Not specified')}\n"
-                f"  Sample Titles: {titles_preview}\n"
-                f"  Last seen: {row.get('last_seen', 'Unknown')}\n"
-                + "-" * 50
+                f"{i:2d}. {row.get('company_name', 'Unknown')} ({row.get('token', '')})\n"
+                f"     Jobs: {row.get('job_count', 0):,} | Remote:{remote_count} Hybrid:{hybrid_count} On-site:{onsite_count}\n"
+                f"     Sample roles: {titles_preview}\n"
+                f"     Locations: {(row.get('locations', 'Not specified') or 'Not specified')[:100]}"
             )
         
+        lines.extend([
+            "",
+            f"📱 Dashboard: Visit your Railway app URL for real-time data",
+            f"🔄 Next update: Automatic collection every 6 hours",
+            f"📅 Report generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
+        ])
+        
         return "\n".join(lines)
+    
+    def _format_html_summary(self, tokens_data: List[sqlite3.Row], trends_data: Dict[str, Any]) -> str:
+        if not tokens_data:
+            return "<p>No tokens collected yet.</p>"
+        
+        total_jobs = sum(row.get('job_count', 0) or 0 for row in tokens_data)
+        total_remote = sum(row.get('remote_jobs_count', 0) or 0 for row in tokens_data)
+        total_hybrid = sum(row.get('hybrid_jobs_count', 0) or 0 for row in tokens_data)
+        total_onsite = sum(row.get('onsite_jobs_count', 0) or 0 for row in tokens_data)
+        
+        # Calculate trends
+        trend_html = ""
+        if trends_data and trends_data.get('current') and trends_data.get('previous'):
+            current = trends_data['current']
+            previous = trends_data['previous']
+            
+            if previous['total_jobs'] and previous['total_jobs'] > 0:
+                job_change = current['total_jobs'] - previous['total_jobs']
+                job_change_pct = (job_change / previous['total_jobs']) * 100
+                company_change = current['companies'] - previous['companies']
+                
+                trend_color = "#28a745" if job_change >= 0 else "#dc3545"
+                trend_icon = "📈" if job_change >= 0 else "📉"
+                
+                trend_html = f"""
+                <div style="background-color: #e8f4fd; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                    <h3>{trend_icon} Month-over-Month Trends</h3>
+                    <p><strong>Jobs Change:</strong> <span style="color: {trend_color};">{job_change:+,} ({job_change_pct:+.1f}%)</span> vs {trends_data.get('previous_month', '')}</p>
+                    <p><strong>New Companies:</strong> +{company_change} companies discovered</p>
+                    {f"<p><strong>New This Month:</strong> {len(trends_data.get('new_companies', []))} companies</p>" if trends_data.get('new_companies') else ""}
+                </div>
+                """
+        
+        html = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; margin: 20px; line-height: 1.6; }}
+                .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; text-align: center; }}
+                .stats {{ display: flex; justify-content: space-around; margin: 20px 0; }}
+                .stat-box {{ background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; min-width: 120px; }}
+                .stat-number {{ font-size: 24px; font-weight: bold; color: #333; }}
+                .stat-label {{ font-size: 12px; color: #666; margin-top: 5px; }}
+                table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
+                th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; }}
+                th {{ background-color: #f2f2f2; font-weight: bold; }}
+                tr:nth-child(even) {{ background-color: #f9f9f9; }}
+                .company-name {{ font-weight: bold; color: #0066cc; }}
+                .job-count {{ font-weight: bold; color: #28a745; }}
+                .work-types {{ font-size: 11px; color: #666; }}
+                .footer {{ margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; font-size: 12px; color: #666; }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>🚀 Greenhouse Market Intelligence</h1>
+                <p>Real-time job market analysis • {datetime.utcnow().strftime('%B %d, %Y')}</p>
+            </div>
+            
+            <div class="stats">
+                <div class="stat-box">
+                    <div class="stat-number">{len(tokens_data):,}</div>
+                    <div class="stat-label">Companies Tracked</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-number">{total_jobs:,}</div>
+                    <div class="stat-label">Total Jobs</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-number">{total_remote/total_jobs*100:.1f}%</div>
+                    <div class="stat-label">Remote Jobs</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-number">{total_hybrid/total_jobs*100:.1f}%</div>
+                    <div class="stat-label">Hybrid Jobs</div>
+                </div>
+            </div>
+            
+            {trend_html}
+            
+            <h2>🏆 Top Hiring Companies</h2>
+            <table>
+                <tr>
+                    <th>Rank</th>
+                    <th>Company</th>
+                    <th>Total Jobs</th>
+                    <th>🏠 Remote</th>
+                    <th>🏢 Hybrid</th>
+                    <th>🏢 On-site</th>
+                    <th>Locations</th>
+                </tr>
+        """
+        
+        # Sort companies by job count and show top 20
+        sorted_companies = sorted(tokens_data, key=lambda x: x.get('job_count', 0) or 0, reverse=True)
+        for i, row in enumerate(sorted_companies[:20], 1):
+            remote_count = row.get('remote_jobs_count', 0) or 0
+            hybrid_count = row.get('hybrid_jobs_count', 0) or 0
+            onsite_count = row.get('onsite_jobs_count', 0) or 0
+            
+            locations = (row.get('locations', '') or '')[:100]
+            if len(locations) >= 100:
+                locations += "..."
+            
+            html += f"""
+            <tr>
+                <td>{i}</td>
+                <td class="company-name">
+                    <a href="https://boards.greenhouse.io/{row.get('token', '')}" target="_blank">
+                        {row.get('company_name', 'Unknown')}
+                    </a>
+                    <br><span style="font-size: 11px; color: #666;">({row.get('token', '')})</span>
+                </td>
+                <td class="job-count">{row.get('job_count', 0):,}</td>
+                <td>{remote_count}</td>
+                <td>{hybrid_count}</td>
+                <td>{onsite_count}</td>
+                <td style="font-size: 11px;">{locations or 'Not specified'}</td>
+            </tr>
+            """
+        
+        html += f"""
+            </table>
+            
+            <div class="footer">
+                <p><strong>🤖 Automated Collection:</strong> Data refreshed every 6 hours from 150+ discovery sources</p>
+                <p><strong>📊 Market Coverage:</strong> Tracking {len(tokens_data)} companies across all tech sectors</p>
+                <p><strong>🔗 Live Data:</strong> Click company names to view current job postings on Greenhouse</p>
+                <p><strong>⏰ Generated:</strong> {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}</p>
+            </div>
+        </body>
+        </html>
+        """
+        return html
 
 
 class GreenhouseCollector:
@@ -639,7 +968,7 @@ class GreenhouseCollector:
             logging.info("No seed tokens configured")
             return 0
         
-        logging.info(f"Processing {len(seed_tokens)} seed tokens")
+        logging.info(f"🚀 Processing {len(seed_tokens)} seed tokens")
         total_processed = 0
         
         for token in seed_tokens:
@@ -656,11 +985,15 @@ class GreenhouseCollector:
                     self.board_parser.parse_board(token, self.config.getint('scraping', 'max_retries', 3))
                 
                 if company_name:
+                    # Update main table
                     success = self.db_manager.upsert_token(
                         token, "seed_token", company_name, job_count, 
                         locations, departments, job_titles, work_type_counts
                     )
+                    
+                    # Create monthly snapshot
                     if success:
+                        self.db_manager.create_monthly_snapshot(token, company_name, job_count, work_type_counts)
                         total_processed += 1
                         logging.info(f"✅ Processed {token}: {company_name} ({job_count} jobs - "
                                    f"Remote:{work_type_counts.get('remote', 0)} "
@@ -681,9 +1014,11 @@ class GreenhouseCollector:
         
         return total_processed
     
-    def crawl_page(self, url: str) -> int:
-        """Crawl a single page for Greenhouse tokens."""
+    def crawl_page(self, url: str) -> Tuple[int, int]:
+        """Crawl a single page for Greenhouse tokens. Returns (total_found, new_tokens)."""
         tokens_found = 0
+        new_tokens = 0
+        error_message = None
         
         try:
             logging.info(f"🔍 Crawling: {url}")
@@ -693,8 +1028,10 @@ class GreenhouseCollector:
                                  timeout=self.config.getint('scraping', 'timeout', 15))
             
             if response.status_code != 200:
-                logging.warning(f"Failed to fetch {url}: HTTP {response.status_code}")
-                return 0
+                error_message = f"HTTP {response.status_code}"
+                logging.warning(f"Failed to fetch {url}: {error_message}")
+                self.db_manager.log_discovery(url, 0, 0, False, error_message)
+                return 0, 0
             
             soup = BeautifulSoup(response.text, "html.parser")
             
@@ -702,26 +1039,41 @@ class GreenhouseCollector:
             for link in soup.find_all("a", href=True):
                 token = TokenExtractor.extract_token(link["href"])
                 if token:
+                    tokens_found += 1
+                    
                     if self.dry_run:
                         logging.info(f"[DRY RUN] Would process discovered token: {token}")
-                        tokens_found += 1
+                        new_tokens += 1
                         continue
+                    
+                    # Check if this is a new token
+                    with self.db_manager.get_connection() as conn:
+                        cursor = conn.execute("SELECT COUNT(*) FROM greenhouse_tokens WHERE token = ?", (token,))
+                        is_new = cursor.fetchone()[0] == 0
                     
                     # Parse the board
                     company_name, job_count, locations, departments, job_titles, work_type_counts = \
                         self.board_parser.parse_board(token, self.config.getint('scraping', 'max_retries', 3))
                     
                     if company_name:
+                        # Update main table
                         success = self.db_manager.upsert_token(
                             token, url, company_name, job_count, 
                             locations, departments, job_titles, work_type_counts
                         )
+                        
+                        # Create monthly snapshot
                         if success:
-                            tokens_found += 1
-                            logging.info(f"🆕 Discovered {token}: {company_name} ({job_count} jobs - "
-                                       f"Remote:{work_type_counts.get('remote', 0)} "
-                                       f"Hybrid:{work_type_counts.get('hybrid', 0)} "
-                                       f"On-site:{work_type_counts.get('onsite', 0)})")
+                            self.db_manager.create_monthly_snapshot(token, company_name, job_count, work_type_counts)
+                            
+                            if is_new:
+                                new_tokens += 1
+                                logging.info(f"🆕 Discovered {token}: {company_name} ({job_count} jobs - "
+                                           f"Remote:{work_type_counts.get('remote', 0)} "
+                                           f"Hybrid:{work_type_counts.get('hybrid', 0)} "
+                                           f"On-site:{work_type_counts.get('onsite', 0)})")
+                            else:
+                                logging.debug(f"♻️ Updated {token}: {company_name} ({job_count} jobs)")
                     
                     # Rate limiting
                     delay = random.uniform(
@@ -731,30 +1083,42 @@ class GreenhouseCollector:
                     time.sleep(delay)
         
         except Exception as e:
+            error_message = str(e)
             logging.error(f"Error crawling {url}: {e}")
         
-        return tokens_found
-
+        finally:
+            # Log the crawl attempt
+            if not self.dry_run:
+                self.db_manager.log_discovery(url, tokens_found, new_tokens, error_message is None, error_message)
+        
+        return tokens_found, new_tokens
+    
     def run(self) -> bool:
         start_time = datetime.utcnow()
         logging.info(f"🚀 Starting Greenhouse token collection {'(DRY RUN)' if self.dry_run else ''}")
         
-        total_tokens = 0
+        total_tokens_processed = 0
+        total_new_discoveries = 0
         
-        # First: Process known seed tokens
+        # Phase 1: Process known seed tokens
         seed_tokens_processed = self.process_seed_tokens()
-        total_tokens += seed_tokens_processed
-        logging.info(f"Processed {seed_tokens_processed} seed tokens")
+        total_tokens_processed += seed_tokens_processed
+        logging.info(f"✅ Phase 1 Complete: Processed {seed_tokens_processed} seed tokens")
         
-        # Second: Crawl seed URLs for new token discovery
+        # Phase 2: Crawl seed URLs for new token discovery
         seed_urls = [url.strip() for url in 
                     self.config.get('seed_urls', 'urls', '').split('\n') if url.strip()]
         
         if seed_urls:
-            logging.info(f"🔍 Crawling {len(seed_urls)} seed URLs for new token discovery")
-            for url in seed_urls:
-                tokens_found = self.crawl_page(url)
-                total_tokens += tokens_found
+            logging.info(f"🔍 Phase 2: Crawling {len(seed_urls)} seed URLs for token discovery")
+            
+            for i, url in enumerate(seed_urls, 1):
+                tokens_found, new_tokens = self.crawl_page(url)
+                total_tokens_processed += tokens_found
+                total_new_discoveries += new_tokens
+                
+                if tokens_found > 0:
+                    logging.info(f"📊 URL {i}/{len(seed_urls)}: Found {tokens_found} tokens ({new_tokens} new) from {url[:50]}...")
                 
                 # Add delay between pages
                 delay = random.uniform(
@@ -762,10 +1126,12 @@ class GreenhouseCollector:
                     self.config.getint('scraping', 'max_delay', 15)
                 )
                 time.sleep(delay)
+            
+            logging.info(f"✅ Phase 2 Complete: Discovered {total_new_discoveries} new companies from URL crawling")
         else:
             logging.info("No seed URLs configured, skipping discovery crawling")
         
-        # Send email summary if enabled
+        # Phase 3: Send enhanced email summary
         if (self.email_reporter and 
             not self.dry_run and 
             self.config.getboolean('email', 'enabled', True)):
@@ -773,13 +1139,22 @@ class GreenhouseCollector:
             recipient = os.getenv('EMAIL_RECIPIENT')
             if recipient:
                 tokens_data = self.db_manager.get_all_tokens()
-                self.email_reporter.send_summary(tokens_data, recipient)
+                trends_data = self.db_manager.get_monthly_trends()
+                self.email_reporter.send_summary(tokens_data, trends_data, recipient)
         
         end_time = datetime.utcnow()
         duration = (end_time - start_time).total_seconds()
         
-        logging.info(f"✅ Collection completed in {duration:.2f} seconds. "
-                    f"Total tokens processed: {total_tokens}")
+        # Final summary
+        with self.db_manager.get_connection() as conn:
+            cursor = conn.execute("SELECT COUNT(*) FROM greenhouse_tokens")
+            total_companies = cursor.fetchone()[0]
+            
+            cursor = conn.execute("SELECT SUM(job_count) FROM greenhouse_tokens")
+            total_jobs = cursor.fetchone()[0] or 0
+        
+        logging.info(f"🎉 Collection completed in {duration/60:.1f} minutes")
+        logging.info(f"📊 Final Stats: {total_companies:,} companies | {total_jobs:,} jobs | {total_new_discoveries} new discoveries")
         
         return True
 
@@ -787,10 +1162,14 @@ class GreenhouseCollector:
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description='Greenhouse Token Collector')
+    parser = argparse.ArgumentParser(description='Enhanced Greenhouse Token Collector')
     parser.add_argument('--dry-run', action='store_true', help='Run without making changes')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Verbose logging')
     
     args = parser.parse_args()
+    
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
     
     try:
         collector = GreenhouseCollector(dry_run=args.dry_run)
