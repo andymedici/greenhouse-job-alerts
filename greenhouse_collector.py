@@ -786,96 +786,52 @@ class EmailReporter:
         return "\n".join(lines)
     
     def _format_html_summary(self, tokens_data: List[sqlite3.Row]) -> str:
-        """Format HTML summary."""
-        if not tokens_data:
-            return "<p>No tokens collected yet.</p>"
-        
-        # Calculate totals
-        total_jobs = sum(row.get('job_count', 0) or 0 for row in tokens_data)
-        total_remote = sum(row.get('remote_jobs_count', 0) or 0 for row in tokens_data)
-        total_hybrid = sum(row.get('hybrid_jobs_count', 0) or 0 for row in tokens_data)
-        total_onsite = sum(row.get('onsite_jobs_count', 0) or 0 for row in tokens_data)
-        
-        html = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif;">
-        <h2>🔍 Greenhouse Tokens Report - {datetime.utcnow().strftime('%Y-%m-%d')}</h2>
-        
-        <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
-            <h3>📊 Summary Statistics</h3>
-            <p><strong>Total Companies:</strong> {len(tokens_data)}</p>
-            <p><strong>Total Jobs:</strong> {total_jobs}</p>
-            <div style="margin-left: 20px;">
-                <p>🏠 <strong>Remote:</strong> {total_remote} ({total_remote/total_jobs*100:.1f}%)</p>
-                <p>🏢 <strong>Hybrid:</strong> {total_hybrid} ({total_hybrid/total_jobs*100:.1f}%)</p>
-                <p>🏢 <strong>On-site:</strong> {total_onsite} ({total_onsite/total_jobs*100:.1f}%)</p>
-            </div>
-        </div>
-        
-        <table border="1" style="border-collapse: collapse; width: 100%;">
-        <tr style="background-color: #e0e0e0;">
-            <th>Company</th>
-            <th>Token</th>
-            <th>Total Jobs</th>
-            <th>🏠 Remote</th>
-            <th>🏢 Hybrid</th>
-            <th>🏢 On-site</th>
-            <th>Locations</th>
-            <th>Last Seen</th>
-        </tr>
-        """ if total_jobs > 0 else f"""
-        <html>
-        <body style="font-family: Arial, sans-serif;">
-        <h2>🔍 Greenhouse Tokens Report - {datetime.utcnow().strftime('%Y-%m-%d')}</h2>
-        
-        <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
-            <h3>📊 Summary Statistics</h3>
-            <p><strong>Total Companies:</strong> {len(tokens_data)}</p>
-            <p><strong>Total Jobs:</strong> {total_jobs}</p>
-        </div>
-        
-        <table border="1" style="border-collapse: collapse; width: 100%;">
-        <tr style="background-color: #e0e0e0;">
-            <th>Company</th>
-            <th>Token</th>
-            <th>Total Jobs</th>
-            <th>🏠 Remote</th>
-            <th>🏢 Hybrid</th>
-            <th>🏢 On-site</th>
-            <th>Locations</th>
-            <th>Last Seen</th>
+    """Format HTML summary."""
+    if not tokens_data:
+        return "<p>No tokens collected yet.</p>"
+    
+    # Calculate totals
+    total_jobs = sum(row.get('job_count', 0) or 0 for row in tokens_data)
+    total_remote = sum(row.get('remote_jobs_count', 0) or 0 for row in tokens_data)
+    total_hybrid = sum(row.get('hybrid_jobs_count', 0) or 0 for row in tokens_data)
+    total_onsite = sum(row.get('onsite_jobs_count', 0) or 0 for row in tokens_data)
+    
+    html = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif;">
+    <h2>🔍 Greenhouse Tokens Report - {datetime.utcnow().strftime('%Y-%m-%d')}</h2>
+    
+    <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+        <h3>📊 Summary Statistics</h3>
+        <p><strong>Total Companies:</strong> {len(tokens_data)}</p>
+        <p><strong>Total Jobs:</strong> {total_jobs}</p>
+    </div>
+    
+    <table border="1" style="border-collapse: collapse; width: 100%;">
+    <tr style="background-color: #e0e0e0;">
+        <th>Company</th>
+        <th>Token</th>
+        <th>Total Jobs</th>
+        <th>Last Seen</th>
+    </tr>
+    """
+    
+    for row in tokens_data:
+        html += f"""
+        <tr>
+            <td><strong>{row.get('company_name', 'Unknown')}</strong></td>
+            <td><a href="https://boards.greenhouse.io/{row.get('token', '')}" target="_blank">{row.get('token', '')}</a></td>
+            <td>{row.get('job_count', 0)}</td>
+            <td>{row.get('last_seen', 'Unknown')}</td>
         </tr>
         """
-        
-        for row in tokens_data:
-            remote_count = row.get('remote_jobs_count', 0) or 0
-            hybrid_count = row.get('hybrid_jobs_count', 0) or 0
-            onsite_count = row.get('onsite_jobs_count', 0) or 0
-            
-            html += f"""
-            <tr>
-                <td><strong>{row.get('company_name', 'Unknown')}</strong></td>
-                <td><a href="https://boards.greenhouse.io/{row.get('token', '')}" target="_blank">{row.get('token', '')}</a></td>
-                <td>{row.get('job_count', 0)}</td>
-                <td>{remote_count}</td>
-                <td>{hybrid_count}</td>
-                <td>{onsite_count}</td>
-                <td>{row.get('locations', 'Not specified')}</td>
-                <td>{row.get('last_seen', 'Unknown')}</td>
-            </tr>
-            """
-        
-        html += """
-        </table>
-        
-        <div style="margin-top: 20px; font-size: 12px; color: #666;">
-            <p><em>Click on any token to view the company's live job board on Greenhouse.</em></p>
-        </div>
-        
-        </body>
-        </html>
-        """
-        return html
+    
+    html += """
+    </table>
+    </body>
+    </html>
+    """
+    return html
 
 
 class GreenhouseCollector:
