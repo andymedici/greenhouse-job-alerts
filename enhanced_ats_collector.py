@@ -6,7 +6,7 @@ A comprehensive system supporting both Greenhouse and Lever ATS with:
 - Geographic expansion detection
 - Work type classification (remote/hybrid/onsite)
 - Market intelligence and trend analysis
-- Automated email reporting with historical insights
+- Automated email reporting with historical insights using Resend API
 - Backward compatibility with existing Greenhouse database
 
 Features:
@@ -23,7 +23,6 @@ import requests
 import sqlite3
 import time
 import random
-import smtplib
 import json
 import logging
 import os
@@ -33,8 +32,6 @@ from datetime import datetime, timedelta
 from configparser import ConfigParser
 from typing import Tuple, List, Optional, Dict, Any
 from urllib.parse import urlparse, urljoin
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
 
 try:
@@ -72,8 +69,6 @@ class Config:
         }
         
         self.config['email'] = {
-            'smtp_server': 'smtp.gmail.com',
-            'smtp_port': '587',
             'enabled': 'true'
         }
         
@@ -907,132 +902,57 @@ class LeverBoardParser:
 
 
 class EmailReporter:
-    """Enhanced email reporting with multi-ATS support."""
+    """Enhanced email reporting with Resend API instead of SMTP."""
     
-    def __init__(self, smtp_server: str, smtp_port: int, smtp_user: str, smtp_pass: str):
-        self.smtp_server = smtp_server
-        self.smtp_port = smtp_port
-        self.smtp_user = smtp_user
-        self.smtp_pass = smtp_pass
+    def __init__(self):
+        self.resend_api_key = os.getenv('RESEND_API_KEY')
+        self.from_email = os.getenv('FROM_EMAIL', 'greenhouse-reports@resend.dev')
     
     def send_summary(self, companies_data: List[Dict], trends_data: Dict[str, Any], recipient: str) -> bool:
-        """Send enhanced email summary with multi-ATS support."""
+        """Send enhanced email summary using Resend API."""
         try:
-            body = self._format_summary(companies_data, trends_data)
+            if not self.resend_api_key:
+                logging.error("RESEND_API_KEY not found in environment variables")
+                return False
+            
+            subject = f"📊 Multi-ATS Market Intelligence - {datetime.utcnow().strftime('%Y-%m-%d')}"
             html_body = self._format_html_summary(companies_data, trends_data)
             
-            msg = MIMEMultipart('alternative')
-            msg["Subject"] = f"Multi-ATS Market Intelligence - {datetime.utcnow().strftime('%Y-%m-%d')}"
-            msg["From"] = self.smtp_user
-            msg["To"] = recipient
+            return self._send_via_resend(subject, html_body, recipient)
             
-            text_part = MIMEText(body, 'plain')
-            html_part = MIMEText(html_body, 'html')
-            
-            msg.attach(text_part)
-            msg.attach(html_part)
-            
-            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
-                server.starttls()
-                server.login(self.smtp_user, self.smtp_pass)
-                server.sendmail(self.smtp_user, recipient, msg.as_string())
-            
-            logging.info("Enhanced multi-ATS email summary sent successfully")
-            return True
         except Exception as e:
             logging.error(f"Error sending email: {e}")
             return False
     
-    def _format_summary(self, companies_data: List[Dict], trends_data: Dict[str, Any]) -> str:
-        """Format enhanced text summary with multi-ATS breakdown."""
-        if not companies_data:
-            return "No companies collected yet."
+    def _send_via_resend(self, subject: str, html_content: str, to_email: str) -> bool:
+        """Send email using Resend API."""
+        url = "https://api.resend.com/emails"
         
-        # Separate by ATS type
-        greenhouse_companies = [c for c in companies_data if c.get('ats_type') == 'greenhouse']
-        lever_companies = [c for c in companies_data if c.get('ats_type') == 'lever']
+        payload = {
+            "from": self.from_email,
+            "to": [to_email],
+            "subject": subject,
+            "html": html_content
+        }
         
-        total_jobs = sum(row.get('job_count', 0) or 0 for row in companies_data)
-        total_remote = sum(row.get('remote_jobs_count', 0) or 0 for row in companies_data)
-        total_hybrid = sum(row.get('hybrid_jobs_count', 0) or 0 for row in companies_data)
-        total_onsite = sum(row.get('onsite_jobs_count', 0) or 0 for row in companies_data)
+        headers = {
+            "Authorization": f"Bearer {self.resend_api_key}",
+            "Content-Type": "application/json"
+        }
         
-        lines = [
-            "Multi-ATS Market Intelligence Report",
-            "=" * 60,
-            "CURRENT MARKET SNAPSHOT",
-            f"Total Companies Tracked: {len(companies_data):,}",
-            f"  Greenhouse: {len(greenhouse_companies):,}",
-            f"  Lever: {len(lever_companies):,}",
-            f"Total Job Openings: {total_jobs:,}",
-            f"  Remote: {total_remote:,} ({total_remote/total_jobs*100:.1f}%)" if total_jobs > 0 else "  Remote: 0",
-            f"  Hybrid: {total_hybrid:,} ({total_hybrid/total_jobs*100:.1f}%)" if total_jobs > 0 else "  Hybrid: 0", 
-            f"  On-site: {total_onsite:,} ({total_onsite/total_jobs*100:.1f}%)" if total_jobs > 0 else "  On-site: 0",
-            ""
-        ]
-        
-        # Add trends if available
-        if trends_data and trends_data.get('current') and trends_data.get('previous'):
-            current = trends_data['current']
-            previous = trends_data['previous']
+        try:
+            response = requests.post(url, json=payload, headers=headers)
             
-            if previous.get('total_jobs') and previous['total_jobs'] > 0:
-                job_change = current.get('total_jobs', 0) - previous['total_jobs']
-                job_change_pct = (job_change / previous['total_jobs']) * 100
-                company_change = current.get('companies', 0) - previous.get('companies', 0)
+            if response.status_code == 200:
+                logging.info("📧 Enhanced email summary sent successfully via Resend")
+                return True
+            else:
+                logging.error(f"❌ Email failed: {response.status_code} - {response.text}")
+                return False
                 
-                lines.extend([
-                    f"MONTH-OVER-MONTH TRENDS ({trends_data.get('current_month', '')})",
-                    f"Jobs Change: {job_change:+,} ({job_change_pct:+.1f}%) vs {trends_data.get('previous_month', '')}",
-                    f"New Companies Discovered: +{company_change} companies",
-                    ""
-                ])
-                
-                # Location expansions
-                if trends_data.get('location_expansions'):
-                    lines.extend([
-                        "GEOGRAPHIC EXPANSIONS (Last 30 Days):",
-                        "Companies expanding to new locations:"
-                    ])
-                    for expansion in trends_data['location_expansions'][:10]:
-                        ats_badge = f"[{expansion.get('ats_type', 'unknown').upper()}]"
-                        lines.append(f"  {ats_badge} {expansion.get('company_name', 'Unknown')} -> {expansion.get('new_location', 'Unknown')} ({expansion.get('job_count', 0)} total jobs)")
-                    lines.append("")
-        
-        lines.extend([
-            "TOP HIRING COMPANIES:",
-            "=" * 30
-        ])
-        
-        # Sort companies by job count and show top 15
-        sorted_companies = sorted(companies_data, key=lambda x: x.get('job_count', 0) or 0, reverse=True)
-        for i, row in enumerate(sorted_companies[:15], 1):
-            try:
-                job_titles_list = json.loads(row.get('job_titles', '[]')) if row.get('job_titles') else []
-            except:
-                job_titles_list = []
-            
-            remote_count = row.get('remote_jobs_count', 0) or 0
-            hybrid_count = row.get('hybrid_jobs_count', 0) or 0
-            onsite_count = row.get('onsite_jobs_count', 0) or 0
-            ats_badge = f"[{row.get('ats_type', 'unknown').upper()}]"
-            titles_preview = ", ".join(job_titles_list[:2]) + ("..." if len(job_titles_list) > 2 else "")
-            
-            lines.append(
-                f"{i:2d}. {ats_badge} {row.get('company_name', 'Unknown')} ({row.get('token', '')})\n"
-                f"     Jobs: {row.get('job_count', 0):,} | Remote:{remote_count} Hybrid:{hybrid_count} On-site:{onsite_count}\n"
-                f"     Sample roles: {titles_preview}\n"
-                f"     Locations: {(row.get('locations', 'Not specified') or 'Not specified')[:100]}"
-            )
-        
-        lines.extend([
-            "",
-            "Dashboard: Visit your Railway app URL for real-time data",
-            "Next update: Automatic collection every 6 hours",
-            f"Report generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
-        ])
-        
-        return "\n".join(lines)
+        except Exception as e:
+            logging.error(f"❌ Email error: {str(e)}")
+            return False
     
     def _format_html_summary(self, companies_data: List[Dict], trends_data: Dict[str, Any]) -> str:
         """Format enhanced HTML summary with multi-ATS breakdown."""
@@ -1043,6 +963,9 @@ class EmailReporter:
         greenhouse_companies = [c for c in companies_data if c.get('ats_type') == 'greenhouse']
         lever_companies = [c for c in companies_data if c.get('ats_type') == 'lever']
         total_jobs = sum(row.get('job_count', 0) or 0 for row in companies_data)
+        total_remote = sum(row.get('remote_jobs_count', 0) or 0 for row in companies_data)
+        total_hybrid = sum(row.get('hybrid_jobs_count', 0) or 0 for row in companies_data)
+        total_onsite = sum(row.get('onsite_jobs_count', 0) or 0 for row in companies_data)
         
         html = f"""
         <html>
@@ -1050,8 +973,8 @@ class EmailReporter:
             <style>
                 body {{ font-family: Arial, sans-serif; margin: 20px; }}
                 .header {{ background: #667eea; color: white; padding: 20px; border-radius: 10px; text-align: center; }}
-                .stats {{ display: flex; justify-content: space-around; margin: 20px 0; }}
-                .stat-box {{ background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; }}
+                .stats {{ display: flex; justify-content: space-around; margin: 20px 0; flex-wrap: wrap; }}
+                .stat-box {{ background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; margin: 5px; }}
                 .stat-number {{ font-size: 24px; font-weight: bold; color: #333; }}
                 .stat-label {{ color: #666; margin-top: 5px; }}
                 table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
@@ -1060,11 +983,12 @@ class EmailReporter:
                 .ats-badge {{ padding: 3px 8px; border-radius: 3px; color: white; font-weight: bold; font-size: 11px; }}
                 .greenhouse {{ background-color: #0066cc; }}
                 .lever {{ background-color: #ff6600; }}
+                .work-type-summary {{ background: #e8f4f8; padding: 15px; border-radius: 8px; margin: 20px 0; }}
             </style>
         </head>
         <body>
             <div class="header">
-                <h1>Multi-ATS Market Intelligence</h1>
+                <h1>🚀 Multi-ATS Market Intelligence</h1>
                 <p>Real-time job market analysis • {datetime.utcnow().strftime('%B %d, %Y')}</p>
             </div>
             
@@ -1087,7 +1011,14 @@ class EmailReporter:
                 </div>
             </div>
             
-            <h2>Top Hiring Companies</h2>
+            <div class="work-type-summary">
+                <h3>Work Type Distribution</h3>
+                <p>🏠 <strong>Remote:</strong> {total_remote:,} jobs ({total_remote/total_jobs*100:.1f}%)</p>
+                <p>🏢 <strong>Hybrid:</strong> {total_hybrid:,} jobs ({total_hybrid/total_jobs*100:.1f}%)</p>
+                <p>🏢 <strong>On-site:</strong> {total_onsite:,} jobs ({total_onsite/total_jobs*100:.1f}%)</p>
+            </div>
+            
+            <h2>🏆 Top Hiring Companies</h2>
             <table>
                 <tr>
                     <th>Rank</th>
@@ -1126,12 +1057,34 @@ class EmailReporter:
             </tr>
             """
         
+        # Add trends section if available
+        trends_section = ""
+        if trends_data and trends_data.get('current') and trends_data.get('previous'):
+            current = trends_data['current']
+            previous = trends_data['previous']
+            
+            if previous.get('total_jobs') and previous['total_jobs'] > 0:
+                job_change = current.get('total_jobs', 0) - previous['total_jobs']
+                job_change_pct = (job_change / previous['total_jobs']) * 100
+                company_change = current.get('companies', 0) - previous.get('companies', 0)
+                
+                trends_section = f"""
+                <div style="background: #f0f8ff; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                    <h3>📈 Month-over-Month Trends</h3>
+                    <p><strong>Job Change:</strong> {job_change:+,} ({job_change_pct:+.1f}%) vs {trends_data.get('previous_month', '')}</p>
+                    <p><strong>New Companies:</strong> +{company_change} companies discovered</p>
+                </div>
+                """
+        
         html += f"""
             </table>
             
-            <div style="margin-top: 30px; font-size: 12px; color: #666;">
+            {trends_section}
+            
+            <div style="margin-top: 30px; font-size: 12px; color: #666; border-top: 1px solid #eee; padding-top: 15px;">
                 <p><strong>Generated:</strong> {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}</p>
-                <p>Click company names to view current job postings</p>
+                <p><strong>Next Collection:</strong> Automatic update in 6 hours</p>
+                <p>Click company names to view current job postings • Data collected from {len(companies_data)} companies across Greenhouse and Lever ATS platforms</p>
             </div>
         </body>
         </html>
@@ -1162,13 +1115,8 @@ class EnhancedATSCollector:
         )
         
         # Setup email if enabled
-        if self.config.getboolean('email', 'enabled', True) and os.getenv('SMTP_USER'):
-            self.email_reporter = EmailReporter(
-                self.config.get('email', 'smtp_server', 'smtp.gmail.com'),
-                self.config.getint('email', 'smtp_port', 587),
-                os.getenv('SMTP_USER'),
-                os.getenv('SMTP_PASS')
-            )
+        if self.config.getboolean('email', 'enabled', True) and os.getenv('RESEND_API_KEY'):
+            self.email_reporter = EmailReporter()
         else:
             self.email_reporter = None
     
@@ -1407,16 +1355,16 @@ class EnhancedATSCollector:
             not self.dry_run and 
             self.config.getboolean('email', 'enabled', True)):
             
-            recipient = os.getenv('EMAIL_RECIPIENT')
-            if recipient:
-                companies_data = self.db_manager.get_all_companies()
-                trends_data = self.db_manager.get_monthly_trends()
-                self.email_reporter.send_summary(companies_data, trends_data, recipient)
+            recipient = "andy.medici@gmail.com"
+            companies_data = self.db_manager.get_all_companies()
+            trends_data = self.db_manager.get_monthly_trends()
+            self.email_reporter.send_summary(companies_data, trends_data, recipient)
         
         end_time = datetime.utcnow()
         duration = (end_time - start_time).total_seconds()
         
         logging.info(f"Enhanced collection completed in {duration/60:.1f} minutes")
+        logging.info("Collection completed. Success: True")
         
         return True
 
