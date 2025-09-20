@@ -340,6 +340,18 @@ class DatabaseManager:
                 )
             """)
             
+            # Location expansion tracking
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS location_expansions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token TEXT,
+                    company_name TEXT,
+                    new_location TEXT,
+                    first_seen_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (token) REFERENCES greenhouse_tokens (token)
+                )
+            """)
+            
             # Add new columns to existing tables if they don't exist
             try:
                 conn.execute("ALTER TABLE greenhouse_tokens ADD COLUMN remote_jobs_count INTEGER DEFAULT 0")
@@ -352,6 +364,7 @@ class DatabaseManager:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_monthly_token_date ON monthly_job_history(token, year, month)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tokens_last_seen ON greenhouse_tokens(last_seen)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_time ON discovery_history(crawl_time)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_location_expansions ON location_expansions(token, first_seen_date)")
             
             conn.commit()
             logging.info("Database initialized successfully")
@@ -369,10 +382,15 @@ class DatabaseManager:
                 work_type_counts = {'remote': 0, 'hybrid': 0, 'onsite': 0}
             
             with self.get_connection() as conn:
-                cursor = conn.execute("SELECT token FROM greenhouse_tokens WHERE token=?", (token,))
-                exists = cursor.fetchone() is not None
+                # Check if token exists and get previous locations
+                cursor = conn.execute("SELECT locations FROM greenhouse_tokens WHERE token=?", (token,))
+                existing_row = cursor.fetchone()
                 
-                if exists:
+                # Track location expansions for existing companies
+                if existing_row:
+                    self._track_location_expansions(conn, token, company_name, existing_row['locations'], locs_str)
+                
+                if existing_row:
                     conn.execute("""
                         UPDATE greenhouse_tokens
                         SET source_url=?, company_name=?, job_count=?, locations=?, 
@@ -400,6 +418,72 @@ class DatabaseManager:
         except Exception as e:
             logging.error(f"Database error for token {token}: {e}")
             return False
+    
+    def _track_location_expansions(self, conn, token: str, company_name: str, old_locations: str, new_locations: str):
+        """Track when companies expand to new geographic locations."""
+        try:
+            # Parse old and new locations
+            old_locs = set()
+            new_locs = set()
+            
+            if old_locations:
+                old_locs = {loc.strip().lower() for loc in old_locations.split(',') if loc.strip()}
+            if new_locations:
+                new_locs = {loc.strip().lower() for loc in new_locations.split(',') if loc.strip()}
+            
+            # Find truly new locations (not just variations)
+            added_locations = new_locs - old_locs
+            
+            # Filter out generic/non-specific locations
+            meaningful_additions = []
+            for loc in added_locations:
+                if self._is_meaningful_location(loc):
+                    meaningful_additions.append(loc.title())
+            
+            # Record significant location expansions
+            for new_location in meaningful_additions:
+                # Check if we've already recorded this expansion recently (within 30 days)
+                cursor = conn.execute("""
+                    SELECT COUNT(*) FROM location_expansions 
+                    WHERE token = ? AND new_location = ? 
+                    AND first_seen_date > datetime('now', '-30 days')
+                """, (token, new_location))
+                
+                if cursor.fetchone()[0] == 0:
+                    conn.execute("""
+                        INSERT INTO location_expansions (token, company_name, new_location)
+                        VALUES (?, ?, ?)
+                    """, (token, company_name, new_location))
+                    
+                    logging.info(f"🌍 Location expansion: {company_name} now hiring in {new_location}")
+        
+        except Exception as e:
+            logging.error(f"Error tracking location expansions for {token}: {e}")
+    
+    def _is_meaningful_location(self, location: str) -> bool:
+        """Filter out generic locations to focus on meaningful geographic expansions."""
+        location_lower = location.lower().strip()
+        
+        # Skip generic/non-geographic terms
+        skip_terms = {
+            'remote', 'anywhere', 'global', 'worldwide', 'various', 'multiple',
+            'tbd', 'flexible', 'distributed', 'virtual', 'n/a', 'not specified',
+            'usa', 'us', 'united states', 'europe', 'asia', 'north america'
+        }
+        
+        # Skip if it's just a generic term
+        if location_lower in skip_terms:
+            return False
+            
+        # Skip if it's too short to be meaningful
+        if len(location_lower) < 3:
+            return False
+            
+        # Must contain at least one letter (not just numbers/symbols)
+        if not any(c.isalpha() for c in location_lower):
+            return False
+            
+        return True
     
     def create_monthly_snapshot(self, token: str, company_name: str, job_count: int, work_type_counts: Dict[str, int]) -> bool:
         """Create monthly snapshot if this is the first time seeing this company this month."""
@@ -509,10 +593,22 @@ class DatabaseManager:
                 """, (now.year, now.month, prev_year, prev_month))
                 new_companies = new_companies_cursor.fetchall()
                 
+                # Location expansions in the last 30 days
+                expansions_cursor = conn.execute("""
+                    SELECT le.company_name, le.new_location, le.first_seen_date,
+                           gt.job_count, gt.token
+                    FROM location_expansions le
+                    JOIN greenhouse_tokens gt ON le.token = gt.token
+                    WHERE le.first_seen_date > datetime('now', '-30 days')
+                    ORDER BY le.first_seen_date DESC
+                """)
+                location_expansions = expansions_cursor.fetchall()
+                
                 return {
                     'current': current,
                     'previous': previous,
                     'new_companies': new_companies,
+                    'location_expansions': location_expansions,
                     'current_month': now.strftime('%B %Y'),
                     'previous_month': f"{['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][prev_month-1]} {prev_year}"
                 }
@@ -757,6 +853,16 @@ class EmailReporter:
                         f"Found {len(trends_data['new_companies'])} new companies hiring on Greenhouse",
                         ""
                     ])
+                
+                # Location expansions
+                if trends_data.get('location_expansions'):
+                    lines.extend([
+                        f"🌍 GEOGRAPHIC EXPANSIONS (Last 30 Days):",
+                        f"Companies expanding to new locations:"
+                    ])
+                    for expansion in trends_data['location_expansions'][:10]:  # Show top 10
+                        lines.append(f"  • {expansion['company_name']} → {expansion['new_location']} ({expansion['job_count']} total jobs)")
+                    lines.append("")
         
         lines.extend([
             f"🏆 TOP HIRING COMPANIES:",
@@ -825,6 +931,24 @@ class EmailReporter:
                 </div>
                 """
         
+        # Location expansions section
+        expansion_html = ""
+        if trends_data.get('location_expansions'):
+            expansion_html = f"""
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #17a2b8;">
+                <h3>🌍 Geographic Expansions (Last 30 Days)</h3>
+                <p>Companies expanding to new hiring locations:</p>
+                <ul style="margin: 10px 0; padding-left: 20px;">
+            """
+            for expansion in trends_data['location_expansions'][:8]:  # Show top 8 in email
+                expansion_html += f"""
+                    <li style="margin: 5px 0;">
+                        <strong>{expansion['company_name']}</strong> → {expansion['new_location']} 
+                        <span style="color: #666; font-size: 12px;">({expansion['job_count']} total jobs)</span>
+                    </li>
+                """
+            expansion_html += "</ul></div>"
+        
         html = f"""
         <html>
         <head>
@@ -871,6 +995,7 @@ class EmailReporter:
             </div>
             
             {trend_html}
+            {expansion_html}
             
             <h2>🏆 Top Hiring Companies</h2>
             <table>
