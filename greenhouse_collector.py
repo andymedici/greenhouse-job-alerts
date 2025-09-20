@@ -7,6 +7,7 @@ A comprehensive system for collecting Greenhouse job board tokens with:
 - Extensive token discovery from 150+ seed URLs
 - Market intelligence and trend analysis
 - Automated email reporting with historical insights
+- Geographic expansion tracking
 
 Features:
 - 53 seed tokens for immediate data
@@ -15,6 +16,7 @@ Features:
 - Smart change detection and historical tracking
 - Email reports with month-over-month comparisons
 - Market intelligence analytics
+- Location expansion detection
 """
 
 import requests
@@ -531,7 +533,8 @@ class DatabaseManager:
         except Exception as e:
             logging.error(f"Failed to log discovery history: {e}")
     
-    def get_all_tokens(self) -> List[sqlite3.Row]:
+    def get_all_tokens(self) -> List[Dict]:
+        """Retrieve all tokens from database as dictionaries."""
         try:
             with self.get_connection() as conn:
                 cursor = conn.execute("""
@@ -541,7 +544,9 @@ class DatabaseManager:
                     FROM greenhouse_tokens 
                     ORDER BY company_name
                 """)
-                return cursor.fetchall()
+                # Convert rows to dictionaries
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
         except Exception as e:
             logging.error(f"Failed to retrieve tokens: {e}")
             return []
@@ -563,7 +568,8 @@ class DatabaseManager:
                     FROM monthly_job_history 
                     WHERE year = ? AND month = ?
                 """, (now.year, now.month))
-                current = current_cursor.fetchone()
+                current_row = current_cursor.fetchone()
+                current = dict(current_row) if current_row else {}
                 
                 # Previous month totals
                 prev_month = now.month - 1 if now.month > 1 else 12
@@ -579,7 +585,8 @@ class DatabaseManager:
                     FROM monthly_job_history 
                     WHERE year = ? AND month = ?
                 """, (prev_year, prev_month))
-                previous = prev_cursor.fetchone()
+                prev_row = prev_cursor.fetchone()
+                previous = dict(prev_row) if prev_row else {}
                 
                 # New companies this month
                 new_companies_cursor = conn.execute("""
@@ -591,7 +598,8 @@ class DatabaseManager:
                     )
                     ORDER BY snapshot_date
                 """, (now.year, now.month, prev_year, prev_month))
-                new_companies = new_companies_cursor.fetchall()
+                new_companies_rows = new_companies_cursor.fetchall()
+                new_companies = [dict(row) for row in new_companies_rows]
                 
                 # Location expansions in the last 30 days
                 expansions_cursor = conn.execute("""
@@ -602,7 +610,8 @@ class DatabaseManager:
                     WHERE le.first_seen_date > datetime('now', '-30 days')
                     ORDER BY le.first_seen_date DESC
                 """)
-                location_expansions = expansions_cursor.fetchall()
+                expansion_rows = expansions_cursor.fetchall()
+                location_expansions = [dict(row) for row in expansion_rows]
                 
                 return {
                     'current': current,
@@ -780,7 +789,7 @@ class EmailReporter:
         self.smtp_user = smtp_user
         self.smtp_pass = smtp_pass
     
-    def send_summary(self, tokens_data: List[sqlite3.Row], trends_data: Dict[str, Any], recipient: str) -> bool:
+    def send_summary(self, tokens_data: List[Dict], trends_data: Dict[str, Any], recipient: str) -> bool:
         try:
             body = self._format_summary(tokens_data, trends_data)
             html_body = self._format_html_summary(tokens_data, trends_data)
@@ -807,7 +816,7 @@ class EmailReporter:
             logging.error(f"Error sending email: {e}")
             return False
     
-    def _format_summary(self, tokens_data: List[sqlite3.Row], trends_data: Dict[str, Any]) -> str:
+    def _format_summary(self, tokens_data: List[Dict], trends_data: Dict[str, Any]) -> str:
         if not tokens_data:
             return "No tokens collected yet."
         
@@ -833,11 +842,11 @@ class EmailReporter:
             current = trends_data['current']
             previous = trends_data['previous']
             
-            if previous['total_jobs'] and previous['total_jobs'] > 0:
-                job_change = current['total_jobs'] - previous['total_jobs']
+            if previous.get('total_jobs') and previous['total_jobs'] > 0:
+                job_change = current.get('total_jobs', 0) - previous['total_jobs']
                 job_change_pct = (job_change / previous['total_jobs']) * 100
                 
-                company_change = current['companies'] - previous['companies']
+                company_change = current.get('companies', 0) - previous.get('companies', 0)
                 
                 lines.extend([
                     f"📈 MONTH-OVER-MONTH TRENDS ({trends_data.get('current_month', '')})",
@@ -861,7 +870,7 @@ class EmailReporter:
                         f"Companies expanding to new locations:"
                     ])
                     for expansion in trends_data['location_expansions'][:10]:  # Show top 10
-                        lines.append(f"  • {expansion['company_name']} → {expansion['new_location']} ({expansion['job_count']} total jobs)")
+                        lines.append(f"  • {expansion.get('company_name', 'Unknown')} → {expansion.get('new_location', 'Unknown')} ({expansion.get('job_count', 0)} total jobs)")
                     lines.append("")
         
         lines.extend([
@@ -899,7 +908,7 @@ class EmailReporter:
         
         return "\n".join(lines)
     
-    def _format_html_summary(self, tokens_data: List[sqlite3.Row], trends_data: Dict[str, Any]) -> str:
+    def _format_html_summary(self, tokens_data: List[Dict], trends_data: Dict[str, Any]) -> str:
         if not tokens_data:
             return "<p>No tokens collected yet.</p>"
         
@@ -914,10 +923,10 @@ class EmailReporter:
             current = trends_data['current']
             previous = trends_data['previous']
             
-            if previous['total_jobs'] and previous['total_jobs'] > 0:
-                job_change = current['total_jobs'] - previous['total_jobs']
+            if previous.get('total_jobs') and previous['total_jobs'] > 0:
+                job_change = current.get('total_jobs', 0) - previous['total_jobs']
                 job_change_pct = (job_change / previous['total_jobs']) * 100
-                company_change = current['companies'] - previous['companies']
+                company_change = current.get('companies', 0) - previous.get('companies', 0)
                 
                 trend_color = "#28a745" if job_change >= 0 else "#dc3545"
                 trend_icon = "📈" if job_change >= 0 else "📉"
@@ -943,8 +952,8 @@ class EmailReporter:
             for expansion in trends_data['location_expansions'][:8]:  # Show top 8 in email
                 expansion_html += f"""
                     <li style="margin: 5px 0;">
-                        <strong>{expansion['company_name']}</strong> → {expansion['new_location']} 
-                        <span style="color: #666; font-size: 12px;">({expansion['job_count']} total jobs)</span>
+                        <strong>{expansion.get('company_name', 'Unknown')}</strong> → {expansion.get('new_location', 'Unknown')} 
+                        <span style="color: #666; font-size: 12px;">({expansion.get('job_count', 0)} total jobs)</span>
                     </li>
                 """
             expansion_html += "</ul></div>"
