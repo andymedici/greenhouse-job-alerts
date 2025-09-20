@@ -63,6 +63,192 @@ class Config:
             'tokens': 'stripe,notion,figma,discord,dropbox,zoom,doordash,instacart,robinhood,coinbase,plaid,openai,anthropic,airbnb,reddit,gitlab,hashicorp,mongodb,elastic,salesforce,snowflake,databricks,atlassian,asana,slack,okta,twilio,brex,mercury,ramp,checkr,chime,affirm,canva,flexport,benchling,retool,vercel,linear,23andme,shopify,tesla,netflix,spotify,unity,cloudflare,docker,intel,nvidia,apple,meta,google,microsoft'
         }
         
+        # Seed URLs for discovering new tokens - comprehensive high-quality list
+        self.config['seed_urls'] = {
+            'urls': '''https://github.com/poteto/hiring-without-whiteboards
+https://github.com/donnemartin/awesome-interview-questions
+https://github.com/jwasham/coding-interview-university
+https://github.com/remoteintech/remote-jobs
+https://github.com/lukasz-madon/awesome-remote-job
+https://github.com/yanirs/established-remote
+https://github.com/hng/tech-companies-in-singapore
+https://github.com/tramcar/awesome-job-list
+https://github.com/blakeembrey/remote-jobs
+https://github.com/jessicard/remote-jobs
+https://themuse.com/companies
+https://builtin.com/companies
+https://builtin.com/jobs
+https://www.keyvalues.com/companies
+https://angel.co/jobs
+https://angel.co/companies
+https://www.wellfound.com/jobs
+https://www.wellfound.com/companies
+https://worklist.fyi/
+https://www.ycombinator.com/companies
+https://www.ycombinator.com/topcompanies
+https://www.crunchbase.com/discover/organization.companies
+https://techcrunch.com/startups/
+https://www.producthunt.com/topics/hiring-and-recruiting
+https://jobs.ashbyhq.com/
+https://remote.co/remote-jobs/
+https://remote.co/remote-companies/
+https://remoteok.io/
+https://remoteok.io/remote-companies
+https://weworkremotely.com/
+https://weworkremotely.com/companies
+https://flexjobs.com/
+https://justremote.co/
+https://justremote.co/remote-companies
+https://remotehub.io/
+https://remotehub.io/companies
+https://whoishiring.io/
+https://whoishiring.io/search/
+https://startup.jobs/
+https://startup.jobs/companies
+https://unicornhunt.io/
+https://unicornhunt.io/companies
+https://www.glassdoor.com/Job/startup-jobs-SRCH_KO0,7.htm
+https://www.indeed.com/q-startup-jobs.html
+https://stackoverflow.com/jobs/companies
+https://stackoverflow.blog/
+https://news.ycombinator.com/jobs
+https://www.linkedin.com/jobs/search/?keywords=startup
+https://jobs.lever.co/
+https://careers.google.com/
+https://jobs.netflix.com/
+https://www.microsoft.com/en-us/careers/
+https://jobs.apple.com/
+https://www.amazon.jobs/
+https://careers.meta.com/
+https://careers.salesforce.com/
+https://jobs.uber.com/
+https://www.airbnb.com/careers/
+https://stripe.com/jobs
+https://about.gitlab.com/jobs/
+https://boards.greenhouse.io/
+https://jobs.rubrik.com/
+https://grnh.se/
+https://apply.workable.com/
+https://jobs.smartrecruiters.com/
+https://www.comparably.com/companies
+https://www.builtinnyc.com/companies
+https://www.builtinla.com/companies
+https://www.builtinaustin.com/companies
+https://www.builtinchicago.com/companies
+https://www.builtinboston.com/companies
+https://www.builtinseattle.com/companies
+https://www.builtincolorado.com/companies
+https://www.failory.com/startups
+https://www.owler.com/
+https://craft.co/startups
+https://techstars.com/portfolio
+https://www.500.co/
+https://a16z.com/portfolio/
+https://www.sequoiacap.com/companies/
+https://www.kleinerperkins.com/companies
+https://www.benchmark.com/companies/
+https://greylock.com/portfolio/
+https://accel.com/companies/
+https://www.gv.com/portfolio/
+https://www.nea.com/portfolio
+https://lightspeed.com/portfolio/
+https://foundrygroup.com/portfolio/
+https://www.sparkcapital.com/portfolio
+https://www.mayfield.com/portfolio/
+https://matrix.com/portfolio/
+https://initialized.com/portfolio/
+https://www.firstround.com/portfolio/
+https://www.usv.com/portfolio/
+https://www.bessemer.com/portfolio
+https://www.insightpartners.com/portfolio/
+https://www.generalcatalyst.com/portfolio/
+https://www.andreessen.org/portfolio/
+https://www.cbinsights.com/research-unicorn-companies
+https://pitchbook.com/
+https://www.startupranking.com/
+https://angel.co/job-collections/remote
+https://angel.co/job-collections/startup-jobs
+https://angel.co/job-collections/engineering
+https://angel.co/job-collections/product
+https://angel.co/job-collections/marketing
+https://angel.co/job-collections/sales
+https://angel.co/job-collections/design
+https://angel.co/job-collections/data-science
+https://techcrunch.com/category/startups/
+https://venturebeat.com/category/entrepreneur/
+https://www.entrepreneur.com/topic/startups
+https://techstartups.com/
+https://startupsavant.com/
+https://www.rocketship.fm/companies
+https://www.f6s.com/companies
+https://www.startupcrawler.com/
+https://www.startupstash.com/
+https://www.producthunt.com/collections/remote-work-tools
+https://nomadlist.com/remote-work-tools
+https://remote.tools/
+https://www.toptal.com/companies
+https://triplebyte.com/
+https://hired.com/
+https://vettery.com/
+https://www.otta.com/companies
+https://jobs.github.com/companies
+https://careers.stackoverflow.com/companies
+https://hired.com/companies
+https://www.levels.fyi/companies/
+https://www.teamblind.com/companies
+https://candor.co/companies
+https://www.fishbowlapp.com/companies
+https://www.comparably.com/
+https://www.glassdoor.com/Reviews/
+https://www.indeed.com/companies
+https://www.ziprecruiter.com/Companies
+https://www.dice.com/jobs
+https://cyberseek.org/heatmap.html
+https://stackoverflow.com/tags
+https://github.com/trending
+https://github.com/topics/startup
+https://github.com/topics/jobs
+https://github.com/topics/careers
+https://github.com/collections/choosing-projects
+https://dev.to/t/career
+https://www.reddit.com/r/startups/
+https://www.reddit.com/r/cscareerquestions/
+https://www.reddit.com/r/jobs/
+https://www.reddit.com/r/remotework/
+https://www.reddit.com/r/digitalnomad/
+https://www.indiehackers.com/
+https://www.producthunt.com/
+https://betalist.com/
+https://www.crunchbase.com/hub/startup-companies
+https://www.eu-startups.com/directory/
+https://www.startups.com/
+https://www.startupblink.com/
+https://www.startupgenome.com/
+https://dealroom.co/
+https://www.tracxn.com/
+https://www.wellfound.com/startup-jobs
+https://jobs.techstars.com/
+https://jobs.ycombinator.com/
+https://500.co/jobs/
+https://techcrunch.com/events/
+https://disrupt.techcrunch.com/
+https://saastr.com/
+https://firstround.com/review/
+https://a16z.com/
+https://news.ycombinator.com/
+https://www.techmeme.com/
+https://techcrunch.com/
+https://venturebeat.com/
+https://www.theverge.com/
+https://arstechnica.com/
+https://www.wired.com/
+https://techreport.com/
+https://www.engadget.com/
+https://gizmodo.com/
+https://www.fastcompany.com/
+https://www.inc.com/'''
+        }
+        
         with open(self.config_file, 'w') as f:
             self.config.write(f)
     
@@ -495,16 +681,89 @@ class GreenhouseCollector:
         
         return total_processed
     
+    def crawl_page(self, url: str) -> int:
+        """Crawl a single page for Greenhouse tokens."""
+        tokens_found = 0
+        
+        try:
+            logging.info(f"🔍 Crawling: {url}")
+            
+            headers = {"User-Agent": self.config.get('scraping', 'user_agent')}
+            response = requests.get(url, headers=headers, 
+                                 timeout=self.config.getint('scraping', 'timeout', 15))
+            
+            if response.status_code != 200:
+                logging.warning(f"Failed to fetch {url}: HTTP {response.status_code}")
+                return 0
+            
+            soup = BeautifulSoup(response.text, "html.parser")
+            
+            # Find all links that might contain Greenhouse tokens
+            for link in soup.find_all("a", href=True):
+                token = TokenExtractor.extract_token(link["href"])
+                if token:
+                    if self.dry_run:
+                        logging.info(f"[DRY RUN] Would process discovered token: {token}")
+                        tokens_found += 1
+                        continue
+                    
+                    # Parse the board
+                    company_name, job_count, locations, departments, job_titles, work_type_counts = \
+                        self.board_parser.parse_board(token, self.config.getint('scraping', 'max_retries', 3))
+                    
+                    if company_name:
+                        success = self.db_manager.upsert_token(
+                            token, url, company_name, job_count, 
+                            locations, departments, job_titles, work_type_counts
+                        )
+                        if success:
+                            tokens_found += 1
+                            logging.info(f"🆕 Discovered {token}: {company_name} ({job_count} jobs - "
+                                       f"Remote:{work_type_counts.get('remote', 0)} "
+                                       f"Hybrid:{work_type_counts.get('hybrid', 0)} "
+                                       f"On-site:{work_type_counts.get('onsite', 0)})")
+                    
+                    # Rate limiting
+                    delay = random.uniform(
+                        self.config.getint('scraping', 'min_delay', 5),
+                        self.config.getint('scraping', 'max_delay', 15)
+                    )
+                    time.sleep(delay)
+        
+        except Exception as e:
+            logging.error(f"Error crawling {url}: {e}")
+        
+        return tokens_found
+
     def run(self) -> bool:
         start_time = datetime.utcnow()
         logging.info(f"🚀 Starting Greenhouse token collection {'(DRY RUN)' if self.dry_run else ''}")
         
         total_tokens = 0
         
-        # Process seed tokens
+        # First: Process known seed tokens
         seed_tokens_processed = self.process_seed_tokens()
         total_tokens += seed_tokens_processed
         logging.info(f"Processed {seed_tokens_processed} seed tokens")
+        
+        # Second: Crawl seed URLs for new token discovery
+        seed_urls = [url.strip() for url in 
+                    self.config.get('seed_urls', 'urls', '').split('\n') if url.strip()]
+        
+        if seed_urls:
+            logging.info(f"🔍 Crawling {len(seed_urls)} seed URLs for new token discovery")
+            for url in seed_urls:
+                tokens_found = self.crawl_page(url)
+                total_tokens += tokens_found
+                
+                # Add delay between pages
+                delay = random.uniform(
+                    self.config.getint('scraping', 'min_delay', 5),
+                    self.config.getint('scraping', 'max_delay', 15)
+                )
+                time.sleep(delay)
+        else:
+            logging.info("No seed URLs configured, skipping discovery crawling")
         
         # Send email summary if enabled
         if (self.email_reporter and 
