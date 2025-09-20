@@ -1,22 +1,8 @@
 """
-Enhanced Greenhouse Metadata Collector with Historical Tracking
---------------------------------------------------------------
-A comprehensive system for collecting Greenhouse job board tokens with:
-- Monthly historical job count tracking
-- Work type classification (remote/hybrid/onsite)
-- Extensive token discovery from 150+ seed URLs
-- Market intelligence and trend analysis
-- Automated email reporting with historical insights
-- Geographic expansion tracking
-
-Features:
-- 53 seed tokens for immediate data
-- 150+ discovery URLs for finding new companies
-- Monthly snapshots for trend analysis
-- Smart change detection and historical tracking
-- Email reports with month-over-month comparisons
-- Market intelligence analytics
-- Location expansion detection
+Enhanced ATS Collector - Supporting Greenhouse and Lever
+--------------------------------------------------------
+Extended version of the Greenhouse collector with Lever support
+and Fortune 500 company URLs for better coverage.
 """
 
 import requests
@@ -27,44 +13,54 @@ import smtplib
 import json
 import logging
 import os
+import urllib.robotparser
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 from configparser import ConfigParser
 from typing import Tuple, List, Optional, Dict, Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
 from bs4 import BeautifulSoup
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass
+    logging.warning("python-dotenv not installed. Using system environment variables only.")
 
 
 class Config:
+    """Enhanced configuration management class."""
+    
     def __init__(self, config_file: str = "config.ini"):
         self.config = ConfigParser()
         self.config_file = config_file
         self._load_config()
     
     def _load_config(self):
+        """Load configuration from file with sensible defaults."""
         if not os.path.exists(self.config_file):
             self._create_default_config()
+        
         self.config.read(self.config_file)
     
     def _create_default_config(self):
+        """Create a default configuration file with Fortune 500 URLs."""
         self.config['database'] = {
-            'path': os.getenv('DB_PATH', 'greenhouse_tokens.db'),
+            'path': 'ats_tokens.db',
+            'backup_enabled': 'true',
+            'max_job_titles': '100'
         }
         
         self.config['scraping'] = {
-            'min_delay': '5',
-            'max_delay': '15',
+            'min_delay': '10',
+            'max_delay': '30',
             'max_retries': '3',
             'timeout': '15',
-            'user_agent': 'JobMarketBot/2.0 (Research; contact: researcher@example.com)',
+            'user_agent': 'ATSCollectorBot/2.0 (Research Purpose; contact: researcher@example.com)',
+            'respect_robots_txt': 'true'
         }
         
         self.config['email'] = {
@@ -73,12 +69,78 @@ class Config:
             'enabled': 'true'
         }
         
-        # Seed tokens - major companies known to use Greenhouse
-        self.config['seed_tokens'] = {
-            'tokens': 'stripe,notion,figma,discord,dropbox,zoom,doordash,instacart,robinhood,coinbase,plaid,openai,anthropic,airbnb,reddit,gitlab,hashicorp,mongodb,elastic,salesforce,snowflake,databricks,atlassian,asana,slack,okta,twilio,brex,mercury,ramp,checkr,chime,affirm,canva,flexport,benchling,retool,vercel,linear,23andme,shopify,tesla,netflix,spotify,unity,cloudflare,docker,intel,nvidia,apple,meta,google,microsoft'
+        # Fortune 500 and major company URLs
+        self.config['fortune_500_urls'] = {
+            'urls': '''https://careers.walmart.com/
+https://www.amazon.jobs/
+https://careers.apple.com/
+https://careers.google.com/
+https://careers.microsoft.com/
+https://jobs.netflix.com/
+https://careers.meta.com/
+https://careers.salesforce.com/
+https://jobs.tesla.com/
+https://careers.berkshirehathaway.com/
+https://www.exxonmobil.com/en/careers
+https://careers.jpmorgan.com/
+https://www.jnj.com/careers/
+https://careers.pg.com/
+https://careers.homedepot.com/
+https://jobs.chevron.com/
+https://careers.verizon.com/
+https://careers.att.com/
+https://careers.ge.com/
+https://www.mcdonalds.com/us/en-us/about-us/careers.html
+https://corporate.target.com/careers/
+https://careers.ups.com/
+https://careers.ibm.com/
+https://careers.intel.com/
+https://jobs.lowes.com/
+https://careers.disney.com/
+https://careers.nike.com/
+https://careers.pfizer.com/
+https://careers.oracle.com/
+https://careers.cisco.com/
+https://careers.adidas-group.com/
+https://careers.merck.com/
+https://careers.abbott.com/
+https://careers.ge.com/healthcare
+https://careers.3m.com/
+https://careers.caterpillar.com/
+https://careers.boeing.com/
+https://careers.lockheedmartin.com/
+https://careers.ford.com/
+https://careers.gm.com/
+https://careers.fedex.com/
+https://www.coca-colacompany.com/careers
+https://careers.pepsi.com/
+https://careers.starbucks.com/
+https://careers.costco.com/
+https://www.linkedin.com/company/*/jobs/
+https://jobs.github.com/
+https://stripe.com/jobs
+https://notion.so/careers
+https://figma.com/careers/
+https://discord.com/jobs
+https://dropbox.com/jobs
+https://zoom.us/careers
+https://doordash.com/careers/
+https://instacart.careers/
+https://robinhood.com/careers/
+https://coinbase.com/careers/
+https://plaid.com/careers/
+https://segment.com/careers/
+https://openai.com/careers/
+https://anthropic.com/careers/
+https://huggingface.co/jobs/
+https://scale.com/careers/
+https://cohere.ai/careers/
+https://runwayml.com/careers/
+https://replicate.com/careers/
+https://perplexity.ai/careers/'''
         }
         
-        # Comprehensive seed URLs for discovering new tokens
+        # Discovery URLs for finding more ATS systems
         self.config['seed_urls'] = {
             'urls': '''https://github.com/poteto/hiring-without-whiteboards
 https://github.com/donnemartin/awesome-interview-questions
@@ -86,204 +148,70 @@ https://github.com/jwasham/coding-interview-university
 https://github.com/remoteintech/remote-jobs
 https://github.com/lukasz-madon/awesome-remote-job
 https://github.com/yanirs/established-remote
-https://github.com/hng/tech-companies-in-singapore
-https://github.com/tramcar/awesome-job-list
-https://github.com/blakeembrey/remote-jobs
-https://github.com/jessicard/remote-jobs
 https://themuse.com/companies
 https://builtin.com/companies
-https://builtin.com/jobs
 https://www.keyvalues.com/companies
 https://angel.co/jobs
-https://angel.co/companies
-https://www.wellfound.com/jobs
-https://www.wellfound.com/companies
 https://worklist.fyi/
 https://www.ycombinator.com/companies
-https://www.ycombinator.com/topcompanies
 https://www.crunchbase.com/discover/organization.companies
 https://techcrunch.com/startups/
 https://www.producthunt.com/topics/hiring-and-recruiting
 https://jobs.ashbyhq.com/
+https://www.wellfound.com/jobs
 https://remote.co/remote-jobs/
-https://remote.co/remote-companies/
 https://remoteok.io/
-https://remoteok.io/remote-companies
 https://weworkremotely.com/
-https://weworkremotely.com/companies
 https://flexjobs.com/
 https://justremote.co/
-https://justremote.co/remote-companies
 https://remotehub.io/
-https://remotehub.io/companies
 https://whoishiring.io/
-https://whoishiring.io/search/
 https://startup.jobs/
-https://startup.jobs/companies
 https://unicornhunt.io/
-https://unicornhunt.io/companies
-https://www.glassdoor.com/Job/startup-jobs-SRCH_KO0,7.htm
-https://www.indeed.com/q-startup-jobs.html
 https://stackoverflow.com/jobs/companies
-https://stackoverflow.blog/
 https://news.ycombinator.com/jobs
-https://www.linkedin.com/jobs/search/?keywords=startup
 https://jobs.lever.co/
-https://careers.google.com/
-https://jobs.netflix.com/
-https://www.microsoft.com/en-us/careers/
-https://jobs.apple.com/
-https://www.amazon.jobs/
-https://careers.meta.com/
-https://careers.salesforce.com/
-https://jobs.uber.com/
-https://www.airbnb.com/careers/
-https://stripe.com/jobs
-https://about.gitlab.com/jobs/
-https://boards.greenhouse.io/
-https://jobs.rubrik.com/
-https://grnh.se/
-https://apply.workable.com/
-https://jobs.smartrecruiters.com/
-https://www.comparably.com/companies
-https://www.builtinnyc.com/companies
-https://www.builtinla.com/companies
-https://www.builtinaustin.com/companies
-https://www.builtinchicago.com/companies
-https://www.builtinboston.com/companies
-https://www.builtinseattle.com/companies
-https://www.builtincolorado.com/companies
-https://www.failory.com/startups
-https://www.owler.com/
-https://craft.co/startups
-https://techstars.com/portfolio
-https://www.500.co/
-https://a16z.com/portfolio/
-https://www.sequoiacap.com/companies/
-https://www.kleinerperkins.com/companies
-https://www.benchmark.com/companies/
-https://greylock.com/portfolio/
-https://accel.com/companies/
-https://www.gv.com/portfolio/
-https://www.nea.com/portfolio
-https://lightspeed.com/portfolio/
-https://foundrygroup.com/portfolio/
-https://www.sparkcapital.com/portfolio
-https://www.mayfield.com/portfolio/
-https://matrix.com/portfolio/
-https://initialized.com/portfolio/
-https://www.firstround.com/portfolio/
-https://www.usv.com/portfolio/
-https://www.bessemer.com/portfolio
-https://www.insightpartners.com/portfolio/
-https://www.generalcatalyst.com/portfolio/
-https://www.andreessen.org/portfolio/
-https://www.cbinsights.com/research-unicorn-companies
-https://pitchbook.com/
-https://www.startupranking.com/
-https://angel.co/job-collections/remote
-https://angel.co/job-collections/startup-jobs
-https://angel.co/job-collections/engineering
-https://angel.co/job-collections/product
-https://angel.co/job-collections/marketing
-https://angel.co/job-collections/sales
-https://angel.co/job-collections/design
-https://angel.co/job-collections/data-science
-https://techcrunch.com/category/startups/
-https://venturebeat.com/category/entrepreneur/
-https://www.entrepreneur.com/topic/startups
-https://techstartups.com/
-https://startupsavant.com/
-https://www.rocketship.fm/companies
-https://www.f6s.com/companies
-https://www.startupcrawler.com/
-https://www.startupstash.com/
-https://www.producthunt.com/collections/remote-work-tools
-https://nomadlist.com/remote-work-tools
-https://remote.tools/
-https://www.toptal.com/companies
-https://triplebyte.com/
-https://hired.com/
-https://vettery.com/
-https://www.otta.com/companies
-https://jobs.github.com/companies
-https://careers.stackoverflow.com/companies
-https://hired.com/companies
-https://www.levels.fyi/companies/
-https://www.teamblind.com/companies
-https://candor.co/companies
-https://www.fishbowlapp.com/companies
-https://www.comparably.com/
-https://www.glassdoor.com/Reviews/
-https://www.indeed.com/companies
-https://www.ziprecruiter.com/Companies
-https://www.dice.com/jobs
-https://cyberseek.org/heatmap.html
-https://stackoverflow.com/tags
-https://github.com/trending
-https://github.com/topics/startup
-https://github.com/topics/jobs
-https://github.com/topics/careers
-https://github.com/collections/choosing-projects
-https://dev.to/t/career
-https://www.reddit.com/r/startups/
-https://www.reddit.com/r/cscareerquestions/
-https://www.reddit.com/r/jobs/
-https://www.reddit.com/r/remotework/
-https://www.reddit.com/r/digitalnomad/
-https://www.indiehackers.com/
-https://www.producthunt.com/
-https://betalist.com/
-https://www.crunchbase.com/hub/startup-companies
-https://www.eu-startups.com/directory/
-https://www.startups.com/
-https://www.startupblink.com/
-https://www.startupgenome.com/
-https://dealroom.co/
-https://www.tracxn.com/
-https://www.wellfound.com/startup-jobs
-https://jobs.techstars.com/
-https://jobs.ycombinator.com/
-https://500.co/jobs/
-https://techcrunch.com/events/
-https://disrupt.techcrunch.com/
-https://saastr.com/
-https://firstround.com/review/
-https://a16z.com/
-https://news.ycombinator.com/
-https://www.techmeme.com/
-https://techcrunch.com/
-https://venturebeat.com/
-https://www.theverge.com/
-https://arstechnica.com/
-https://www.wired.com/
-https://techreport.com/
-https://www.engadget.com/
-https://gizmodo.com/
-https://www.fastcompany.com/
-https://www.inc.com/'''
+https://boards.greenhouse.io/'''
+        }
+        
+        # Known tokens for both systems
+        self.config['seed_tokens'] = {
+            'greenhouse_tokens': '''stripe,notion,figma,discord,dropbox,zoom,doordash,instacart,robinhood,coinbase,plaid,segment,openai,anthropic,huggingface,scale,cohere,runway,replicate,perplexity,
+airbnb,reddit,gitlab,hashicorp,mongodb,elastic,cockroachlabs,mixpanel,sendgrid,twilio,okta,auth0,datadog,newrelic,pagerduty,
+salesforce,snowflake,databricks,palantir,atlassian,asana,slack,zoom,calendly,notion,airtable,zapier,retool,webflow''',
+            'lever_tokens': '''lever,uber,netflix,postmates,box,github,thumbtack,lyft,twitch,palantir,atlassian,asana,slack,zoom,calendly,linear,
+mixpanel,sendgrid,twilio,okta,auth0,datadog,newrelic,pagerduty,mongodb,elastic,cockroachlabs,
+brex,mercury,ramp,checkr,chime,affirm,klarna,stripe,square,adyen,marqeta'''
         }
         
         with open(self.config_file, 'w') as f:
             self.config.write(f)
+        
+        logging.info(f"Created default config file: {self.config_file}")
     
     def get(self, section: str, key: str, fallback: Any = None) -> str:
+        """Get configuration value with fallback."""
         return self.config.get(section, key, fallback=fallback)
     
     def getint(self, section: str, key: str, fallback: int = 0) -> int:
+        """Get integer configuration value."""
         return self.config.getint(section, key, fallback=fallback)
     
     def getboolean(self, section: str, key: str, fallback: bool = False) -> bool:
+        """Get boolean configuration value."""
         return self.config.getboolean(section, key, fallback=fallback)
 
 
 class DatabaseManager:
+    """Enhanced database manager supporting multiple ATS systems."""
+    
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._init_db()
     
     @contextmanager
     def get_connection(self):
+        """Context manager for database connections."""
         conn = None
         try:
             conn = sqlite3.connect(self.db_path, timeout=30)
@@ -294,11 +222,14 @@ class DatabaseManager:
                 conn.close()
     
     def _init_db(self):
+        """Initialize database with tables for multiple ATS systems."""
         with self.get_connection() as conn:
-            # Main tokens table
+            # Modified table to support multiple ATS types
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS greenhouse_tokens (
-                    token TEXT PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS ats_companies (
+                    id TEXT PRIMARY KEY,
+                    ats_type TEXT NOT NULL,
+                    token TEXT NOT NULL,
                     source_url TEXT,
                     company_name TEXT,
                     job_count INTEGER,
@@ -308,327 +239,157 @@ class DatabaseManager:
                     remote_jobs_count INTEGER DEFAULT 0,
                     hybrid_jobs_count INTEGER DEFAULT 0,
                     onsite_jobs_count INTEGER DEFAULT 0,
+                    work_type_breakdown TEXT,
                     first_seen TIMESTAMP,
-                    last_seen TIMESTAMP
+                    last_seen TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(ats_type, token)
                 )
             """)
             
-            # Monthly historical data
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS monthly_job_history (
+                CREATE TABLE IF NOT EXISTS job_details (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_id TEXT,
+                    ats_type TEXT,
                     token TEXT,
-                    year INTEGER,
-                    month INTEGER,
-                    job_count INTEGER,
-                    remote_count INTEGER,
-                    hybrid_count INTEGER,
-                    onsite_count INTEGER,
-                    snapshot_date TIMESTAMP,
-                    FOREIGN KEY (token) REFERENCES greenhouse_tokens (token)
+                    job_title TEXT,
+                    job_url TEXT,
+                    location TEXT,
+                    department TEXT,
+                    work_type TEXT,
+                    posted_date TEXT,
+                    job_description_snippet TEXT,
+                    first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (company_id) REFERENCES ats_companies (id)
                 )
             """)
             
-            # Discovery tracking
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS discovery_history (
+                CREATE TABLE IF NOT EXISTS crawl_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     url TEXT,
+                    ats_type TEXT,
                     tokens_found INTEGER,
-                    new_tokens INTEGER,
                     success BOOLEAN,
                     error_message TEXT,
                     crawl_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
-            # Location expansion tracking
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS location_expansions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    token TEXT,
-                    company_name TEXT,
-                    new_location TEXT,
-                    first_seen_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (token) REFERENCES greenhouse_tokens (token)
-                )
-            """)
-            
-            # Add new columns to existing tables if they don't exist
-            try:
-                conn.execute("ALTER TABLE greenhouse_tokens ADD COLUMN remote_jobs_count INTEGER DEFAULT 0")
-                conn.execute("ALTER TABLE greenhouse_tokens ADD COLUMN hybrid_jobs_count INTEGER DEFAULT 0") 
-                conn.execute("ALTER TABLE greenhouse_tokens ADD COLUMN onsite_jobs_count INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
-            
-            # Create indexes for performance
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_monthly_token_date ON monthly_job_history(token, year, month)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_tokens_last_seen ON greenhouse_tokens(last_seen)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_discovery_time ON discovery_history(crawl_time)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_location_expansions ON location_expansions(token, first_seen_date)")
+            # Create indexes
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ats_type ON ats_companies(ats_type)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_last_seen ON ats_companies(last_seen)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_work_type ON job_details(work_type)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_job_company ON job_details(company_id)")
             
             conn.commit()
             logging.info("Database initialized successfully")
     
-    def upsert_token(self, token: str, source: str, company_name: str, 
-                    job_count: int, locations: List[str], departments: List[str], 
-                    job_titles: List[str], work_type_counts: Dict[str, int] = None) -> bool:
+    def upsert_company(self, ats_type: str, token: str, source: str, company_name: str, 
+                      job_count: int, locations: List[str], departments: List[str], 
+                      job_titles: List[str], work_type_counts: Dict[str, int] = None,
+                      job_details: List[Dict] = None) -> bool:
+        """Insert or update a company record."""
         try:
             now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-            titles_json = json.dumps(job_titles[:50])
-            locs_str = ", ".join(locations[:20])
-            depts_str = ", ".join(departments[:10])
+            company_id = f"{ats_type}_{token}"
+            titles_json = json.dumps(job_titles[:100])
+            locs_str = ", ".join(locations[:50])
+            depts_str = ", ".join(departments[:20])
             
             if work_type_counts is None:
                 work_type_counts = {'remote': 0, 'hybrid': 0, 'onsite': 0}
             
+            work_type_breakdown = json.dumps(work_type_counts)
+            
             with self.get_connection() as conn:
-                # Check if token exists and get previous locations
-                cursor = conn.execute("SELECT locations FROM greenhouse_tokens WHERE token=?", (token,))
-                existing_row = cursor.fetchone()
+                cursor = conn.execute("SELECT id FROM ats_companies WHERE id=?", (company_id,))
+                exists = cursor.fetchone() is not None
                 
-                # Track location expansions for existing companies
-                if existing_row:
-                    self._track_location_expansions(conn, token, company_name, existing_row['locations'], locs_str)
-                
-                if existing_row:
+                if exists:
                     conn.execute("""
-                        UPDATE greenhouse_tokens
+                        UPDATE ats_companies
                         SET source_url=?, company_name=?, job_count=?, locations=?, 
                             departments=?, job_titles=?, remote_jobs_count=?, hybrid_jobs_count=?,
-                            onsite_jobs_count=?, last_seen=?
-                        WHERE token=?
+                            onsite_jobs_count=?, work_type_breakdown=?, last_seen=?, updated_at=?
+                        WHERE id=?
                     """, (source, company_name, job_count, locs_str, depts_str, 
                          titles_json, work_type_counts.get('remote', 0), 
                          work_type_counts.get('hybrid', 0), work_type_counts.get('onsite', 0),
-                         now, token))
+                         work_type_breakdown, now, now, company_id))
+                    logging.info(f"Updated {ats_type} company: {token}")
                 else:
                     conn.execute("""
-                        INSERT INTO greenhouse_tokens
-                        (token, source_url, company_name, job_count, locations, 
+                        INSERT INTO ats_companies
+                        (id, ats_type, token, source_url, company_name, job_count, locations, 
                          departments, job_titles, remote_jobs_count, hybrid_jobs_count,
-                         onsite_jobs_count, first_seen, last_seen)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (token, source, company_name, job_count, locs_str, 
-                         depts_str, titles_json, work_type_counts.get('remote', 0),
+                         onsite_jobs_count, work_type_breakdown, first_seen, last_seen)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (company_id, ats_type, token, source, company_name, job_count, 
+                         locs_str, depts_str, titles_json, work_type_counts.get('remote', 0),
                          work_type_counts.get('hybrid', 0), work_type_counts.get('onsite', 0),
-                         now, now))
+                         work_type_breakdown, now, now))
+                    logging.info(f"Inserted new {ats_type} company: {token}")
+                
+                # Store detailed job information
+                if job_details:
+                    conn.execute("DELETE FROM job_details WHERE company_id=?", (company_id,))
+                    
+                    for job in job_details[:100]:
+                        conn.execute("""
+                            INSERT INTO job_details 
+                            (company_id, ats_type, token, job_title, job_url, location, 
+                             department, work_type, posted_date, job_description_snippet)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (company_id, ats_type, token, job.get('title', ''), 
+                             job.get('url', ''), job.get('location', ''), 
+                             job.get('department', ''), job.get('work_type', ''), 
+                             job.get('posted_date', ''), job.get('description_snippet', '')))
                 
                 conn.commit()
                 return True
         except Exception as e:
-            logging.error(f"Database error for token {token}: {e}")
+            logging.error(f"Database error for {ats_type} token {token}: {e}")
             return False
     
-    def _track_location_expansions(self, conn, token: str, company_name: str, old_locations: str, new_locations: str):
-        """Track when companies expand to new geographic locations."""
-        try:
-            # Parse old and new locations
-            old_locs = set()
-            new_locs = set()
-            
-            if old_locations:
-                old_locs = {loc.strip().lower() for loc in old_locations.split(',') if loc.strip()}
-            if new_locations:
-                new_locs = {loc.strip().lower() for loc in new_locations.split(',') if loc.strip()}
-            
-            # Find truly new locations (not just variations)
-            added_locations = new_locs - old_locs
-            
-            # Filter out generic/non-specific locations
-            meaningful_additions = []
-            for loc in added_locations:
-                if self._is_meaningful_location(loc):
-                    meaningful_additions.append(loc.title())
-            
-            # Record significant location expansions
-            for new_location in meaningful_additions:
-                # Check if we've already recorded this expansion recently (within 30 days)
-                cursor = conn.execute("""
-                    SELECT COUNT(*) FROM location_expansions 
-                    WHERE token = ? AND new_location = ? 
-                    AND first_seen_date > datetime('now', '-30 days')
-                """, (token, new_location))
-                
-                if cursor.fetchone()[0] == 0:
-                    conn.execute("""
-                        INSERT INTO location_expansions (token, company_name, new_location)
-                        VALUES (?, ?, ?)
-                    """, (token, company_name, new_location))
-                    
-                    logging.info(f"🌍 Location expansion: {company_name} now hiring in {new_location}")
-        
-        except Exception as e:
-            logging.error(f"Error tracking location expansions for {token}: {e}")
-    
-    def _is_meaningful_location(self, location: str) -> bool:
-        """Filter out generic locations to focus on meaningful geographic expansions."""
-        location_lower = location.lower().strip()
-        
-        # Skip generic/non-geographic terms
-        skip_terms = {
-            'remote', 'anywhere', 'global', 'worldwide', 'various', 'multiple',
-            'tbd', 'flexible', 'distributed', 'virtual', 'n/a', 'not specified',
-            'usa', 'us', 'united states', 'europe', 'asia', 'north america'
-        }
-        
-        # Skip if it's just a generic term
-        if location_lower in skip_terms:
-            return False
-            
-        # Skip if it's too short to be meaningful
-        if len(location_lower) < 3:
-            return False
-            
-        # Must contain at least one letter (not just numbers/symbols)
-        if not any(c.isalpha() for c in location_lower):
-            return False
-            
-        return True
-    
-    def create_monthly_snapshot(self, token: str, company_name: str, job_count: int, work_type_counts: Dict[str, int]) -> bool:
-        """Create monthly snapshot if this is the first time seeing this company this month."""
-        try:
-            now = datetime.utcnow()
-            
-            with self.get_connection() as conn:
-                # Check if we already have a snapshot for this month
-                cursor = conn.execute("""
-                    SELECT COUNT(*) FROM monthly_job_history 
-                    WHERE token = ? AND year = ? AND month = ?
-                """, (token, now.year, now.month))
-                
-                existing_count = cursor.fetchone()[0]
-                
-                # Create snapshot if this is first time seeing company this month
-                if existing_count == 0:
-                    conn.execute("""
-                        INSERT INTO monthly_job_history 
-                        (token, year, month, job_count, remote_count, 
-                         hybrid_count, onsite_count, snapshot_date)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (token, now.year, now.month, job_count,
-                          work_type_counts.get('remote', 0),
-                          work_type_counts.get('hybrid', 0),
-                          work_type_counts.get('onsite', 0), now))
-                    
-                    conn.commit()
-                    logging.info(f"📅 Monthly snapshot created for {token} - {now.strftime('%B %Y')}")
-                    return True
-                return False
-        except Exception as e:
-            logging.error(f"Error creating monthly snapshot for {token}: {e}")
-            return False
-    
-    def log_discovery(self, url: str, tokens_found: int, new_tokens: int, success: bool, error_message: str = None):
-        """Log URL crawling results."""
+    def log_crawl(self, url: str, ats_type: str, tokens_found: int, success: bool, error_message: str = None):
+        """Log crawl attempt."""
         try:
             with self.get_connection() as conn:
                 conn.execute("""
-                    INSERT INTO discovery_history (url, tokens_found, new_tokens, success, error_message)
+                    INSERT INTO crawl_history (url, ats_type, tokens_found, success, error_message)
                     VALUES (?, ?, ?, ?, ?)
-                """, (url, tokens_found, new_tokens, success, error_message))
+                """, (url, ats_type, tokens_found, success, error_message))
                 conn.commit()
         except Exception as e:
-            logging.error(f"Failed to log discovery history: {e}")
+            logging.error(f"Failed to log crawl history: {e}")
     
-    def get_all_tokens(self) -> List[Dict]:
-        """Retrieve all tokens from database as dictionaries."""
+    def get_all_companies(self) -> List[sqlite3.Row]:
+        """Retrieve all companies from database."""
         try:
             with self.get_connection() as conn:
                 cursor = conn.execute("""
-                    SELECT token, company_name, job_count, locations, departments, 
+                    SELECT ats_type, token, company_name, job_count, locations, departments, 
                            job_titles, remote_jobs_count, hybrid_jobs_count, onsite_jobs_count,
-                           first_seen, last_seen
-                    FROM greenhouse_tokens 
-                    ORDER BY company_name
+                           work_type_breakdown, first_seen, last_seen
+                    FROM ats_companies 
+                    ORDER BY ats_type, company_name
                 """)
-                # Convert rows to dictionaries
-                rows = cursor.fetchall()
-                return [dict(row) for row in rows]
+                return cursor.fetchall()
         except Exception as e:
-            logging.error(f"Failed to retrieve tokens: {e}")
+            logging.error(f"Failed to retrieve companies: {e}")
             return []
-    
-    def get_monthly_trends(self) -> Dict[str, Any]:
-        """Get month-over-month trends for email reporting."""
-        try:
-            with self.get_connection() as conn:
-                now = datetime.utcnow()
-                
-                # Current month totals
-                current_cursor = conn.execute("""
-                    SELECT 
-                        COUNT(*) as companies,
-                        SUM(job_count) as total_jobs,
-                        SUM(remote_count) as remote_jobs,
-                        SUM(hybrid_count) as hybrid_jobs,
-                        SUM(onsite_count) as onsite_jobs
-                    FROM monthly_job_history 
-                    WHERE year = ? AND month = ?
-                """, (now.year, now.month))
-                current_row = current_cursor.fetchone()
-                current = dict(current_row) if current_row else {}
-                
-                # Previous month totals
-                prev_month = now.month - 1 if now.month > 1 else 12
-                prev_year = now.year if now.month > 1 else now.year - 1
-                
-                prev_cursor = conn.execute("""
-                    SELECT 
-                        COUNT(*) as companies,
-                        SUM(job_count) as total_jobs,
-                        SUM(remote_count) as remote_jobs,
-                        SUM(hybrid_count) as hybrid_jobs,
-                        SUM(onsite_count) as onsite_jobs
-                    FROM monthly_job_history 
-                    WHERE year = ? AND month = ?
-                """, (prev_year, prev_month))
-                prev_row = prev_cursor.fetchone()
-                previous = dict(prev_row) if prev_row else {}
-                
-                # New companies this month
-                new_companies_cursor = conn.execute("""
-                    SELECT token, snapshot_date FROM monthly_job_history 
-                    WHERE year = ? AND month = ?
-                    AND token NOT IN (
-                        SELECT DISTINCT token FROM monthly_job_history 
-                        WHERE year = ? AND month = ?
-                    )
-                    ORDER BY snapshot_date
-                """, (now.year, now.month, prev_year, prev_month))
-                new_companies_rows = new_companies_cursor.fetchall()
-                new_companies = [dict(row) for row in new_companies_rows]
-                
-                # Location expansions in the last 30 days
-                expansions_cursor = conn.execute("""
-                    SELECT le.company_name, le.new_location, le.first_seen_date,
-                           gt.job_count, gt.token
-                    FROM location_expansions le
-                    JOIN greenhouse_tokens gt ON le.token = gt.token
-                    WHERE le.first_seen_date > datetime('now', '-30 days')
-                    ORDER BY le.first_seen_date DESC
-                """)
-                expansion_rows = expansions_cursor.fetchall()
-                location_expansions = [dict(row) for row in expansion_rows]
-                
-                return {
-                    'current': current,
-                    'previous': previous,
-                    'new_companies': new_companies,
-                    'location_expansions': location_expansions,
-                    'current_month': now.strftime('%B %Y'),
-                    'previous_month': f"{['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][prev_month-1]} {prev_year}"
-                }
-        except Exception as e:
-            logging.error(f"Failed to retrieve monthly trends: {e}")
-            return {}
 
 
 class TokenExtractor:
+    """Extract and validate tokens from multiple ATS systems."""
+    
     @staticmethod
-    def extract_token(url: str) -> Optional[str]:
+    def extract_greenhouse_token(url: str) -> Optional[str]:
+        """Extract Greenhouse token from URL."""
         try:
             parsed = urlparse(url)
             if parsed.netloc == "boards.greenhouse.io":
@@ -637,84 +398,138 @@ class TokenExtractor:
                     token = parts[0]
                     if TokenExtractor.validate_token(token):
                         return token
-        except Exception:
-            pass
+        except Exception as e:
+            logging.debug(f"Could not extract greenhouse token from {url}: {e}")
+        return None
+    
+    @staticmethod
+    def extract_lever_token(url: str) -> Optional[str]:
+        """Extract Lever token from URL."""
+        try:
+            parsed = urlparse(url)
+            if parsed.netloc == "jobs.lever.co":
+                parts = parsed.path.strip("/").split("/")
+                if parts and parts[0]:
+                    token = parts[0]
+                    if TokenExtractor.validate_token(token):
+                        return token
+            # Also check for lever URLs in other formats
+            elif "lever.co" in parsed.netloc:
+                # Some companies use custom subdomains like company.lever.co
+                subdomain = parsed.netloc.split('.')[0]
+                if subdomain != "jobs" and TokenExtractor.validate_token(subdomain):
+                    return subdomain
+        except Exception as e:
+            logging.debug(f"Could not extract lever token from {url}: {e}")
         return None
     
     @staticmethod
     def validate_token(token: str) -> bool:
+        """Validate token format."""
         return (token and 
                 len(token) >= 2 and 
                 len(token) <= 100 and 
-                token.replace('-', '').replace('_', '').isalnum())
+                token.replace('-', '').replace('_', '').replace('.', '').isalnum())
 
 
-class GreenhouseBoardParser:
+class LeverBoardParser:
+    """Parse Lever job board pages."""
+    
     def __init__(self, user_agent: str, timeout: int = 15):
         self.user_agent = user_agent
         self.timeout = timeout
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': user_agent})
     
-    def parse_board(self, token: str, max_retries: int = 3) -> Tuple[Optional[str], int, List[str], List[str], List[str], Dict[str, int]]:
-        url = f"https://boards.greenhouse.io/{token}"
+    def parse_board(self, token: str, max_retries: int = 3) -> Tuple[Optional[str], int, List[str], List[str], List[str], Dict[str, int], List[Dict]]:
+        """Fetch and parse metadata from Lever board."""
+        # Try different URL formats for Lever
+        urls_to_try = [
+            f"https://jobs.lever.co/{token}",
+            f"https://{token}.lever.co/jobs",
+            f"https://{token}.jobs.lever.co/"
+        ]
         
-        for attempt in range(max_retries):
-            try:
-                response = self.session.get(url, timeout=self.timeout)
-                
-                if response.status_code == 429:
-                    wait_time = int(response.headers.get('Retry-After', 60))
-                    logging.warning(f"Rate limited for {token}, waiting {wait_time} seconds...")
-                    time.sleep(wait_time)
-                    continue
-                elif response.status_code == 404:
-                    return None, 0, [], [], [], {}
-                elif response.status_code != 200:
-                    return None, 0, [], [], [], {}
-                
-                return self._parse_html(response.text, token)
-                
-            except requests.RequestException as e:
-                if attempt == max_retries - 1:
-                    return None, 0, [], [], [], {}
-                time.sleep(random.uniform(5, 15))
+        for url in urls_to_try:
+            for attempt in range(max_retries):
+                try:
+                    response = self.session.get(url, timeout=self.timeout)
+                    
+                    if response.status_code == 429:
+                        wait_time = int(response.headers.get('Retry-After', 60))
+                        logging.warning(f"Rate limited for {token}, waiting {wait_time} seconds...")
+                        time.sleep(wait_time)
+                        continue
+                    elif response.status_code == 404:
+                        break  # Try next URL format
+                    elif response.status_code != 200:
+                        logging.warning(f"HTTP {response.status_code} for {url}")
+                        break
+                    
+                    result = self._parse_html(response.text, token)
+                    if result[0]:  # If we got a company name, parsing succeeded
+                        return result
+                    
+                except requests.RequestException as e:
+                    logging.warning(f"Attempt {attempt + 1} failed for {url}: {e}")
+                    if attempt == max_retries - 1:
+                        break
+                    time.sleep(random.uniform(5, 15))
         
-        return None, 0, [], [], [], {}
+        return None, 0, [], [], [], {}, []
     
-    def _parse_html(self, html: str, token: str) -> Tuple[str, int, List[str], List[str], List[str], Dict[str, int]]:
+    def _parse_html(self, html: str, token: str) -> Tuple[str, int, List[str], List[str], List[str], Dict[str, int], List[Dict]]:
+        """Parse HTML content to extract job information."""
         soup = BeautifulSoup(html, "html.parser")
         
         # Extract company name
         company_name = self._extract_company_name(soup, token)
         
-        # Find job listings
+        # Extract jobs data
         jobs_data = self._extract_jobs_data(soup)
         
         job_titles = []
         locations = set()
         departments = set()
         work_type_counts = {'remote': 0, 'hybrid': 0, 'onsite': 0}
+        detailed_jobs = []
         
         for job_data in jobs_data:
             if job_data.get('title'):
-                job_titles.append(job_data['title'][:100])
+                job_titles.append(self._sanitize_text(job_data['title']))
                 
-                # Classify work type
                 work_type = self._classify_work_type(job_data.get('location', ''), job_data.get('title', ''))
                 work_type_counts[work_type] += 1
+                
+                detailed_job = {
+                    'title': self._sanitize_text(job_data['title']),
+                    'url': job_data.get('url', ''),
+                    'location': self._sanitize_text(job_data.get('location', '')),
+                    'department': self._sanitize_text(job_data.get('department', '')),
+                    'work_type': work_type,
+                    'posted_date': job_data.get('posted_date', ''),
+                    'description_snippet': self._sanitize_text(job_data.get('description', ''))[:500]
+                }
+                detailed_jobs.append(detailed_job)
             
             if job_data.get('location'):
-                locations.add(job_data['location'][:50])
+                locations.add(self._sanitize_text(job_data['location']))
             if job_data.get('department'):
-                departments.add(job_data['department'][:50])
+                departments.add(self._sanitize_text(job_data['department']))
         
         return (company_name, len(job_titles), 
                 sorted(list(locations)), sorted(list(departments)), job_titles,
-                work_type_counts)
+                work_type_counts, detailed_jobs)
     
     def _extract_company_name(self, soup: BeautifulSoup, token: str) -> str:
-        selectors = ['h1', '.company-name', 'title']
+        """Extract company name from Lever page."""
+        selectors = [
+            '.company-name',
+            '[data-qa="company-name"]',
+            'h1',
+            'title',
+            '.header-company-name'
+        ]
         
         for selector in selectors:
             element = soup.select_one(selector)
@@ -722,14 +537,24 @@ class GreenhouseBoardParser:
                 text = element.get_text(strip=True)
                 if text and len(text) > 2:
                     text = text.replace(' Jobs', '').replace(' Careers', '').strip()
-                    return text[:100]
+                    return self._sanitize_text(text)
         
         return token.replace('-', ' ').replace('_', ' ').title()
     
     def _extract_jobs_data(self, soup: BeautifulSoup) -> List[Dict[str, str]]:
+        """Extract job data from Lever page."""
         jobs_data = []
         
-        job_selectors = ['.opening', '[data-board-job]', '.job-listing', 'a[href*="/jobs/"]']
+        # Lever-specific selectors
+        job_selectors = [
+            '.posting',
+            '[data-qa="posting"]',
+            '.posting-card',
+            '.job-posting',
+            'a[href*="/jobs/"]',
+            '.lever-job',
+            '.posting-name'
+        ]
         
         for selector in job_selectors:
             elements = soup.select(selector)
@@ -743,33 +568,50 @@ class GreenhouseBoardParser:
         return jobs_data
     
     def _extract_job_from_element(self, element) -> Optional[Dict[str, str]]:
+        """Extract job information from a single element."""
         job_data = {}
         
+        # Extract title and URL
         title_element = element if element.name in ['a', 'h1', 'h2', 'h3'] else element.find(['a', 'h1', 'h2', 'h3'])
         if title_element:
             job_data['title'] = title_element.get_text(strip=True)
+            if title_element.name == 'a' and title_element.get('href'):
+                job_data['url'] = title_element.get('href')
+                if job_data['url'].startswith('/'):
+                    job_data['url'] = f"https://jobs.lever.co{job_data['url']}"
         
-        location_selectors = ['.location', '[data-location]', '.job-location']
+        # Extract location
+        location_selectors = ['.posting-location', '.location', '[data-qa="posting-location"]']
         for sel in location_selectors:
             loc_elem = element.find(class_=sel.replace('.', '')) or element.find_next(class_=sel.replace('.', ''))
             if loc_elem:
                 job_data['location'] = loc_elem.get_text(strip=True)
                 break
         
-        dept_elem = element.find_previous(['h2', 'h3']) or element.find(['h2', 'h3'])
-        if dept_elem:
-            dept_text = dept_elem.get_text(strip=True)
-            if dept_text and len(dept_text) < 100:
-                job_data['department'] = dept_text
+        # Extract department
+        dept_selectors = ['.posting-category', '.department', '[data-qa="posting-category"]']
+        for sel in dept_selectors:
+            dept_elem = element.find(class_=sel.replace('.', '')) or element.find_next(class_=sel.replace('.', ''))
+            if dept_elem:
+                job_data['department'] = dept_elem.get_text(strip=True)
+                break
         
         return job_data if job_data.get('title') else None
     
     def _classify_work_type(self, location: str, title: str) -> str:
+        """Classify job as remote, hybrid, or onsite."""
         location_lower = location.lower()
         title_lower = title.lower()
         
-        remote_keywords = ['remote', 'anywhere', 'distributed', 'work from home', 'wfh', 'telecommute']
-        hybrid_keywords = ['hybrid', 'flexible', 'partial remote', 'remote friendly']
+        remote_keywords = [
+            'remote', 'anywhere', 'distributed', 'work from home', 'wfh',
+            'telecommute', 'virtual', 'global', 'worldwide'
+        ]
+        
+        hybrid_keywords = [
+            'hybrid', 'flexible', 'partial remote', 'some remote',
+            'remote friendly', 'remote optional'
+        ]
         
         for keyword in remote_keywords:
             if keyword in location_lower or keyword in title_lower:
@@ -780,304 +622,42 @@ class GreenhouseBoardParser:
                 return 'hybrid'
         
         return 'onsite'
-
-
-class EmailReporter:
-    def __init__(self, smtp_server: str, smtp_port: int, smtp_user: str, smtp_pass: str):
-        self.smtp_server = smtp_server
-        self.smtp_port = smtp_port
-        self.smtp_user = smtp_user
-        self.smtp_pass = smtp_pass
     
-    def send_summary(self, tokens_data: List[Dict], trends_data: Dict[str, Any], recipient: str) -> bool:
-        try:
-            body = self._format_summary(tokens_data, trends_data)
-            html_body = self._format_html_summary(tokens_data, trends_data)
-            
-            msg = MIMEMultipart('alternative')
-            msg["Subject"] = f"📊 Greenhouse Market Intelligence - {datetime.utcnow().strftime('%Y-%m-%d')}"
-            msg["From"] = self.smtp_user
-            msg["To"] = recipient
-            
-            text_part = MIMEText(body, 'plain')
-            html_part = MIMEText(html_body, 'html')
-            
-            msg.attach(text_part)
-            msg.attach(html_part)
-            
-            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
-                server.starttls()
-                server.login(self.smtp_user, self.smtp_pass)
-                server.sendmail(self.smtp_user, recipient, msg.as_string())
-            
-            logging.info("📧 Enhanced email summary sent successfully")
-            return True
-        except Exception as e:
-            logging.error(f"Error sending email: {e}")
-            return False
-    
-    def _format_summary(self, tokens_data: List[Dict], trends_data: Dict[str, Any]) -> str:
-        if not tokens_data:
-            return "No tokens collected yet."
-        
-        total_jobs = sum(row.get('job_count', 0) or 0 for row in tokens_data)
-        total_remote = sum(row.get('remote_jobs_count', 0) or 0 for row in tokens_data)
-        total_hybrid = sum(row.get('hybrid_jobs_count', 0) or 0 for row in tokens_data)
-        total_onsite = sum(row.get('onsite_jobs_count', 0) or 0 for row in tokens_data)
-        
-        lines = [
-            f"🚀 Greenhouse Market Intelligence Report",
-            f"=" * 60,
-            f"📊 CURRENT MARKET SNAPSHOT",
-            f"Total Companies Tracked: {len(tokens_data)}",
-            f"Total Job Openings: {total_jobs:,}",
-            f"  🏠 Remote: {total_remote:,} ({total_remote/total_jobs*100:.1f}%)" if total_jobs > 0 else "  🏠 Remote: 0",
-            f"  🏢 Hybrid: {total_hybrid:,} ({total_hybrid/total_jobs*100:.1f}%)" if total_jobs > 0 else "  🏢 Hybrid: 0", 
-            f"  🏢 On-site: {total_onsite:,} ({total_onsite/total_jobs*100:.1f}%)" if total_jobs > 0 else "  🏢 On-site: 0",
-            ""
-        ]
-        
-        # Add trends if available
-        if trends_data and trends_data.get('current') and trends_data.get('previous'):
-            current = trends_data['current']
-            previous = trends_data['previous']
-            
-            if previous.get('total_jobs') and previous['total_jobs'] > 0:
-                job_change = current.get('total_jobs', 0) - previous['total_jobs']
-                job_change_pct = (job_change / previous['total_jobs']) * 100
-                
-                company_change = current.get('companies', 0) - previous.get('companies', 0)
-                
-                lines.extend([
-                    f"📈 MONTH-OVER-MONTH TRENDS ({trends_data.get('current_month', '')})",
-                    f"Jobs Change: {job_change:+,} ({job_change_pct:+.1f}%) vs {trends_data.get('previous_month', '')}",
-                    f"New Companies Discovered: +{company_change} companies",
-                    ""
-                ])
-                
-                # New companies this month
-                if trends_data.get('new_companies'):
-                    lines.extend([
-                        f"🆕 NEW COMPANIES DISCOVERED THIS MONTH:",
-                        f"Found {len(trends_data['new_companies'])} new companies hiring on Greenhouse",
-                        ""
-                    ])
-                
-                # Location expansions
-                if trends_data.get('location_expansions'):
-                    lines.extend([
-                        f"🌍 GEOGRAPHIC EXPANSIONS (Last 30 Days):",
-                        f"Companies expanding to new locations:"
-                    ])
-                    for expansion in trends_data['location_expansions'][:10]:  # Show top 10
-                        lines.append(f"  • {expansion.get('company_name', 'Unknown')} → {expansion.get('new_location', 'Unknown')} ({expansion.get('job_count', 0)} total jobs)")
-                    lines.append("")
-        
-        lines.extend([
-            f"🏆 TOP HIRING COMPANIES:",
-            f"=" * 30
-        ])
-        
-        # Sort companies by job count and show top 15
-        sorted_companies = sorted(tokens_data, key=lambda x: x.get('job_count', 0) or 0, reverse=True)
-        for i, row in enumerate(sorted_companies[:15], 1):
-            try:
-                job_titles_list = json.loads(row.get('job_titles', '[]')) if row.get('job_titles') else []
-            except:
-                job_titles_list = []
-            
-            remote_count = row.get('remote_jobs_count', 0) or 0
-            hybrid_count = row.get('hybrid_jobs_count', 0) or 0
-            onsite_count = row.get('onsite_jobs_count', 0) or 0
-            
-            titles_preview = ", ".join(job_titles_list[:2]) + ("..." if len(job_titles_list) > 2 else "")
-            
-            lines.append(
-                f"{i:2d}. {row.get('company_name', 'Unknown')} ({row.get('token', '')})\n"
-                f"     Jobs: {row.get('job_count', 0):,} | Remote:{remote_count} Hybrid:{hybrid_count} On-site:{onsite_count}\n"
-                f"     Sample roles: {titles_preview}\n"
-                f"     Locations: {(row.get('locations', 'Not specified') or 'Not specified')[:100]}"
-            )
-        
-        lines.extend([
-            "",
-            f"📱 Dashboard: Visit your Railway app URL for real-time data",
-            f"🔄 Next update: Automatic collection every 6 hours",
-            f"📅 Report generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
-        ])
-        
-        return "\n".join(lines)
-    
-    def _format_html_summary(self, tokens_data: List[Dict], trends_data: Dict[str, Any]) -> str:
-        if not tokens_data:
-            return "<p>No tokens collected yet.</p>"
-        
-        total_jobs = sum(row.get('job_count', 0) or 0 for row in tokens_data)
-        total_remote = sum(row.get('remote_jobs_count', 0) or 0 for row in tokens_data)
-        total_hybrid = sum(row.get('hybrid_jobs_count', 0) or 0 for row in tokens_data)
-        total_onsite = sum(row.get('onsite_jobs_count', 0) or 0 for row in tokens_data)
-        
-        # Calculate trends
-        trend_html = ""
-        if trends_data and trends_data.get('current') and trends_data.get('previous'):
-            current = trends_data['current']
-            previous = trends_data['previous']
-            
-            if previous.get('total_jobs') and previous['total_jobs'] > 0:
-                job_change = current.get('total_jobs', 0) - previous['total_jobs']
-                job_change_pct = (job_change / previous['total_jobs']) * 100
-                company_change = current.get('companies', 0) - previous.get('companies', 0)
-                
-                trend_color = "#28a745" if job_change >= 0 else "#dc3545"
-                trend_icon = "📈" if job_change >= 0 else "📉"
-                
-                trend_html = f"""
-                <div style="background-color: #e8f4fd; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                    <h3>{trend_icon} Month-over-Month Trends</h3>
-                    <p><strong>Jobs Change:</strong> <span style="color: {trend_color};">{job_change:+,} ({job_change_pct:+.1f}%)</span> vs {trends_data.get('previous_month', '')}</p>
-                    <p><strong>New Companies:</strong> +{company_change} companies discovered</p>
-                    {f"<p><strong>New This Month:</strong> {len(trends_data.get('new_companies', []))} companies</p>" if trends_data.get('new_companies') else ""}
-                </div>
-                """
-        
-        # Location expansions section
-        expansion_html = ""
-        if trends_data.get('location_expansions'):
-            expansion_html = f"""
-            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #17a2b8;">
-                <h3>🌍 Geographic Expansions (Last 30 Days)</h3>
-                <p>Companies expanding to new hiring locations:</p>
-                <ul style="margin: 10px 0; padding-left: 20px;">
-            """
-            for expansion in trends_data['location_expansions'][:8]:  # Show top 8 in email
-                expansion_html += f"""
-                    <li style="margin: 5px 0;">
-                        <strong>{expansion.get('company_name', 'Unknown')}</strong> → {expansion.get('new_location', 'Unknown')} 
-                        <span style="color: #666; font-size: 12px;">({expansion.get('job_count', 0)} total jobs)</span>
-                    </li>
-                """
-            expansion_html += "</ul></div>"
-        
-        html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; margin: 20px; line-height: 1.6; }}
-                .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; text-align: center; }}
-                .stats {{ display: flex; justify-content: space-around; margin: 20px 0; }}
-                .stat-box {{ background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; min-width: 120px; }}
-                .stat-number {{ font-size: 24px; font-weight: bold; color: #333; }}
-                .stat-label {{ font-size: 12px; color: #666; margin-top: 5px; }}
-                table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
-                th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; }}
-                th {{ background-color: #f2f2f2; font-weight: bold; }}
-                tr:nth-child(even) {{ background-color: #f9f9f9; }}
-                .company-name {{ font-weight: bold; color: #0066cc; }}
-                .job-count {{ font-weight: bold; color: #28a745; }}
-                .work-types {{ font-size: 11px; color: #666; }}
-                .footer {{ margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; font-size: 12px; color: #666; }}
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <h1>🚀 Greenhouse Market Intelligence</h1>
-                <p>Real-time job market analysis • {datetime.utcnow().strftime('%B %d, %Y')}</p>
-            </div>
-            
-            <div class="stats">
-                <div class="stat-box">
-                    <div class="stat-number">{len(tokens_data):,}</div>
-                    <div class="stat-label">Companies Tracked</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-number">{total_jobs:,}</div>
-                    <div class="stat-label">Total Jobs</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-number">{total_remote/total_jobs*100:.1f}%</div>
-                    <div class="stat-label">Remote Jobs</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-number">{total_hybrid/total_jobs*100:.1f}%</div>
-                    <div class="stat-label">Hybrid Jobs</div>
-                </div>
-            </div>
-            
-            {trend_html}
-            {expansion_html}
-            
-            <h2>🏆 Top Hiring Companies</h2>
-            <table>
-                <tr>
-                    <th>Rank</th>
-                    <th>Company</th>
-                    <th>Total Jobs</th>
-                    <th>🏠 Remote</th>
-                    <th>🏢 Hybrid</th>
-                    <th>🏢 On-site</th>
-                    <th>Locations</th>
-                </tr>
-        """
-        
-        # Sort companies by job count and show top 20
-        sorted_companies = sorted(tokens_data, key=lambda x: x.get('job_count', 0) or 0, reverse=True)
-        for i, row in enumerate(sorted_companies[:20], 1):
-            remote_count = row.get('remote_jobs_count', 0) or 0
-            hybrid_count = row.get('hybrid_jobs_count', 0) or 0
-            onsite_count = row.get('onsite_jobs_count', 0) or 0
-            
-            locations = (row.get('locations', '') or '')[:100]
-            if len(locations) >= 100:
-                locations += "..."
-            
-            html += f"""
-            <tr>
-                <td>{i}</td>
-                <td class="company-name">
-                    <a href="https://boards.greenhouse.io/{row.get('token', '')}" target="_blank">
-                        {row.get('company_name', 'Unknown')}
-                    </a>
-                    <br><span style="font-size: 11px; color: #666;">({row.get('token', '')})</span>
-                </td>
-                <td class="job-count">{row.get('job_count', 0):,}</td>
-                <td>{remote_count}</td>
-                <td>{hybrid_count}</td>
-                <td>{onsite_count}</td>
-                <td style="font-size: 11px;">{locations or 'Not specified'}</td>
-            </tr>
-            """
-        
-        html += f"""
-            </table>
-            
-            <div class="footer">
-                <p><strong>🤖 Automated Collection:</strong> Data refreshed every 6 hours from 150+ discovery sources</p>
-                <p><strong>📊 Market Coverage:</strong> Tracking {len(tokens_data)} companies across all tech sectors</p>
-                <p><strong>🔗 Live Data:</strong> Click company names to view current job postings on Greenhouse</p>
-                <p><strong>⏰ Generated:</strong> {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}</p>
-            </div>
-        </body>
-        </html>
-        """
-        return html
+    @staticmethod
+    def _sanitize_text(text: str) -> str:
+        """Clean and validate text data."""
+        if not text:
+            return ""
+        return text.strip()[:200]
 
 
-class GreenhouseCollector:
+class EnhancedATSCollector:
+    """Enhanced collector supporting multiple ATS systems."""
+    
     def __init__(self, config_file: str = "config.ini", dry_run: bool = False):
         self.dry_run = dry_run
         self.config = Config(config_file)
         self._setup_logging()
+        self._validate_environment()
         
         # Initialize components
-        db_path = os.getenv('DB_PATH', 'greenhouse_tokens.db')
-        self.db_manager = DatabaseManager(db_path)
-        self.board_parser = GreenhouseBoardParser(
+        self.db_manager = DatabaseManager(self.config.get('database', 'path', 'ats_tokens.db'))
+        
+        # Import original classes from the existing code
+        from TokenCollector1 import RobotsChecker, GreenhouseBoardParser, EmailReporter
+        
+        self.robots_checker = RobotsChecker(self.config.get('scraping', 'user_agent'))
+        self.greenhouse_parser = GreenhouseBoardParser(
+            self.config.get('scraping', 'user_agent'),
+            self.config.getint('scraping', 'timeout', 15)
+        )
+        self.lever_parser = LeverBoardParser(
             self.config.get('scraping', 'user_agent'),
             self.config.getint('scraping', 'timeout', 15)
         )
         
         # Setup email if enabled
-        if self.config.getboolean('email', 'enabled', True) and os.getenv('SMTP_USER'):
+        if self.config.getboolean('email', 'enabled', True):
             self.email_reporter = EmailReporter(
                 self.config.get('email', 'smtp_server', 'smtp.gmail.com'),
                 self.config.getint('email', 'smtp_port', 587),
@@ -1088,74 +668,46 @@ class GreenhouseCollector:
             self.email_reporter = None
     
     def _setup_logging(self):
+        """Configure logging."""
+        log_level = logging.DEBUG if self.dry_run else logging.INFO
+        
         logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[logging.StreamHandler()]
+            level=log_level,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler('ats_collector.log'),
+                logging.StreamHandler()
+            ]
         )
+        
+        logging.getLogger('urllib3').setLevel(logging.WARNING)
+        logging.getLogger('requests').setLevel(logging.WARNING)
     
-    def process_seed_tokens(self) -> int:
-        seed_tokens = [token.strip() for token in 
-                      self.config.get('seed_tokens', 'tokens', '').split(',') if token.strip()]
+    def _validate_environment(self):
+        """Validate required environment variables."""
+        required_env_vars = []
         
-        if not seed_tokens:
-            logging.info("No seed tokens configured")
-            return 0
+        if self.config.getboolean('email', 'enabled', True):
+            required_env_vars.extend(['SMTP_USER', 'SMTP_PASS', 'EMAIL_RECIPIENT'])
         
-        logging.info(f"🚀 Processing {len(seed_tokens)} seed tokens")
-        total_processed = 0
-        
-        for token in seed_tokens:
-            if not TokenExtractor.validate_token(token):
-                continue
-                
-            if self.dry_run:
-                logging.info(f"[DRY RUN] Would process seed token: {token}")
-                total_processed += 1
-                continue
-            
-            try:
-                company_name, job_count, locations, departments, job_titles, work_type_counts = \
-                    self.board_parser.parse_board(token, self.config.getint('scraping', 'max_retries', 3))
-                
-                if company_name:
-                    # Update main table
-                    success = self.db_manager.upsert_token(
-                        token, "seed_token", company_name, job_count, 
-                        locations, departments, job_titles, work_type_counts
-                    )
-                    
-                    # Create monthly snapshot
-                    if success:
-                        self.db_manager.create_monthly_snapshot(token, company_name, job_count, work_type_counts)
-                        total_processed += 1
-                        logging.info(f"✅ Processed {token}: {company_name} ({job_count} jobs - "
-                                   f"Remote:{work_type_counts.get('remote', 0)} "
-                                   f"Hybrid:{work_type_counts.get('hybrid', 0)} "
-                                   f"On-site:{work_type_counts.get('onsite', 0)})")
-                else:
-                    logging.warning(f"Failed to parse seed token: {token}")
-                
-                # Rate limiting
-                delay = random.uniform(
-                    self.config.getint('scraping', 'min_delay', 5),
-                    self.config.getint('scraping', 'max_delay', 15)
-                )
-                time.sleep(delay)
-                
-            except Exception as e:
-                logging.error(f"Error processing seed token {token}: {e}")
-        
-        return total_processed
+        missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+        if missing_vars:
+            logging.error(f"Missing required environment variables: {missing_vars}")
+            raise ValueError(f"Missing required environment variables: {missing_vars}")
     
     def crawl_page(self, url: str) -> Tuple[int, int]:
-        """Crawl a single page for Greenhouse tokens. Returns (total_found, new_tokens)."""
-        tokens_found = 0
-        new_tokens = 0
+        """Crawl a single page for ATS tokens. Returns (greenhouse_tokens, lever_tokens)."""
+        if self.config.getboolean('scraping', 'respect_robots_txt', True):
+            if not self.robots_checker.can_fetch(url):
+                logging.warning(f"Skipping {url} due to robots.txt restrictions")
+                return 0, 0
+        
+        greenhouse_tokens = 0
+        lever_tokens = 0
         error_message = None
         
         try:
-            logging.info(f"🔍 Crawling: {url}")
+            logging.info(f"Crawling: {url}")
             
             headers = {"User-Agent": self.config.get('scraping', 'user_agent')}
             response = requests.get(url, headers=headers, 
@@ -1164,55 +716,59 @@ class GreenhouseCollector:
             if response.status_code != 200:
                 error_message = f"HTTP {response.status_code}"
                 logging.warning(f"Failed to fetch {url}: {error_message}")
-                self.db_manager.log_discovery(url, 0, 0, False, error_message)
                 return 0, 0
             
             soup = BeautifulSoup(response.text, "html.parser")
             
-            # Find all links that might contain Greenhouse tokens
+            # Find all links that might contain ATS tokens
             for link in soup.find_all("a", href=True):
-                token = TokenExtractor.extract_token(link["href"])
-                if token:
-                    tokens_found += 1
-                    
+                href = link["href"]
+                
+                # Check for Greenhouse tokens
+                greenhouse_token = TokenExtractor.extract_greenhouse_token(href)
+                if greenhouse_token:
                     if self.dry_run:
-                        logging.info(f"[DRY RUN] Would process discovered token: {token}")
-                        new_tokens += 1
+                        logging.info(f"[DRY RUN] Would process Greenhouse token: {greenhouse_token}")
+                        greenhouse_tokens += 1
                         continue
                     
-                    # Check if this is a new token
-                    with self.db_manager.get_connection() as conn:
-                        cursor = conn.execute("SELECT COUNT(*) FROM greenhouse_tokens WHERE token = ?", (token,))
-                        is_new = cursor.fetchone()[0] == 0
-                    
-                    # Parse the board
-                    company_name, job_count, locations, departments, job_titles, work_type_counts = \
-                        self.board_parser.parse_board(token, self.config.getint('scraping', 'max_retries', 3))
+                    company_name, job_count, locations, departments, job_titles, work_type_counts, job_details = \
+                        self.greenhouse_parser.parse_board(greenhouse_token, self.config.getint('scraping', 'max_retries', 3))
                     
                     if company_name:
-                        # Update main table
-                        success = self.db_manager.upsert_token(
-                            token, url, company_name, job_count, 
-                            locations, departments, job_titles, work_type_counts
+                        success = self.db_manager.upsert_company(
+                            'greenhouse', greenhouse_token, url, company_name, job_count, 
+                            locations, departments, job_titles, work_type_counts, job_details
                         )
-                        
-                        # Create monthly snapshot
                         if success:
-                            self.db_manager.create_monthly_snapshot(token, company_name, job_count, work_type_counts)
-                            
-                            if is_new:
-                                new_tokens += 1
-                                logging.info(f"🆕 Discovered {token}: {company_name} ({job_count} jobs - "
-                                           f"Remote:{work_type_counts.get('remote', 0)} "
-                                           f"Hybrid:{work_type_counts.get('hybrid', 0)} "
-                                           f"On-site:{work_type_counts.get('onsite', 0)})")
-                            else:
-                                logging.debug(f"♻️ Updated {token}: {company_name} ({job_count} jobs)")
+                            greenhouse_tokens += 1
+                            logging.info(f"Processed Greenhouse {greenhouse_token}: {company_name} ({job_count} jobs)")
+                
+                # Check for Lever tokens
+                lever_token = TokenExtractor.extract_lever_token(href)
+                if lever_token:
+                    if self.dry_run:
+                        logging.info(f"[DRY RUN] Would process Lever token: {lever_token}")
+                        lever_tokens += 1
+                        continue
                     
-                    # Rate limiting
+                    company_name, job_count, locations, departments, job_titles, work_type_counts, job_details = \
+                        self.lever_parser.parse_board(lever_token, self.config.getint('scraping', 'max_retries', 3))
+                    
+                    if company_name:
+                        success = self.db_manager.upsert_company(
+                            'lever', lever_token, url, company_name, job_count, 
+                            locations, departments, job_titles, work_type_counts, job_details
+                        )
+                        if success:
+                            lever_tokens += 1
+                            logging.info(f"Processed Lever {lever_token}: {company_name} ({job_count} jobs)")
+                
+                # Rate limiting between token processing
+                if greenhouse_token or lever_token:
                     delay = random.uniform(
-                        self.config.getint('scraping', 'min_delay', 5),
-                        self.config.getint('scraping', 'max_delay', 15)
+                        self.config.getint('scraping', 'min_delay', 10),
+                        self.config.getint('scraping', 'max_delay', 30)
                     )
                     time.sleep(delay)
         
@@ -1221,92 +777,373 @@ class GreenhouseCollector:
             logging.error(f"Error crawling {url}: {e}")
         
         finally:
-            # Log the crawl attempt
+            # Log the crawl attempts
             if not self.dry_run:
-                self.db_manager.log_discovery(url, tokens_found, new_tokens, error_message is None, error_message)
+                if greenhouse_tokens > 0:
+                    self.db_manager.log_crawl(url, 'greenhouse', greenhouse_tokens, error_message is None, error_message)
+                if lever_tokens > 0:
+                    self.db_manager.log_crawl(url, 'lever', lever_tokens, error_message is None, error_message)
         
-        return tokens_found, new_tokens
+        return greenhouse_tokens, lever_tokens
+    
+    def process_seed_tokens(self) -> Tuple[int, int]:
+        """Process known ATS tokens directly."""
+        greenhouse_tokens = [token.strip() for token in 
+                           self.config.get('seed_tokens', 'greenhouse_tokens', '').split(',') if token.strip()]
+        lever_tokens = [token.strip() for token in 
+                       self.config.get('seed_tokens', 'lever_tokens', '').split(',') if token.strip()]
+        
+        total_greenhouse = 0
+        total_lever = 0
+        
+        # Process Greenhouse tokens
+        if greenhouse_tokens:
+            logging.info(f"Processing {len(greenhouse_tokens)} seed Greenhouse tokens")
+            for token in greenhouse_tokens:
+                if not TokenExtractor.validate_token(token):
+                    logging.warning(f"Invalid Greenhouse token format: {token}")
+                    continue
+                    
+                if self.dry_run:
+                    logging.info(f"[DRY RUN] Would process Greenhouse seed token: {token}")
+                    total_greenhouse += 1
+                    continue
+                
+                try:
+                    company_name, job_count, locations, departments, job_titles, work_type_counts, job_details = \
+                        self.greenhouse_parser.parse_board(token, self.config.getint('scraping', 'max_retries', 3))
+                    
+                    if company_name:
+                        success = self.db_manager.upsert_company(
+                            'greenhouse', token, "seed_token", company_name, job_count, 
+                            locations, departments, job_titles, work_type_counts, job_details
+                        )
+                        if success:
+                            total_greenhouse += 1
+                            logging.info(f"Processed Greenhouse seed {token}: {company_name} ({job_count} jobs)")
+                    else:
+                        logging.warning(f"Failed to parse Greenhouse seed token: {token}")
+                    
+                    delay = random.uniform(
+                        self.config.getint('scraping', 'min_delay', 10),
+                        self.config.getint('scraping', 'max_delay', 30)
+                    )
+                    time.sleep(delay)
+                    
+                except Exception as e:
+                    logging.error(f"Error processing Greenhouse seed token {token}: {e}")
+        
+        # Process Lever tokens
+        if lever_tokens:
+            logging.info(f"Processing {len(lever_tokens)} seed Lever tokens")
+            for token in lever_tokens:
+                if not TokenExtractor.validate_token(token):
+                    logging.warning(f"Invalid Lever token format: {token}")
+                    continue
+                    
+                if self.dry_run:
+                    logging.info(f"[DRY RUN] Would process Lever seed token: {token}")
+                    total_lever += 1
+                    continue
+                
+                try:
+                    company_name, job_count, locations, departments, job_titles, work_type_counts, job_details = \
+                        self.lever_parser.parse_board(token, self.config.getint('scraping', 'max_retries', 3))
+                    
+                    if company_name:
+                        success = self.db_manager.upsert_company(
+                            'lever', token, "seed_token", company_name, job_count, 
+                            locations, departments, job_titles, work_type_counts, job_details
+                        )
+                        if success:
+                            total_lever += 1
+                            logging.info(f"Processed Lever seed {token}: {company_name} ({job_count} jobs)")
+                    else:
+                        logging.warning(f"Failed to parse Lever seed token: {token}")
+                    
+                    delay = random.uniform(
+                        self.config.getint('scraping', 'min_delay', 10),
+                        self.config.getint('scraping', 'max_delay', 30)
+                    )
+                    time.sleep(delay)
+                    
+                except Exception as e:
+                    logging.error(f"Error processing Lever seed token {token}: {e}")
+        
+        return total_greenhouse, total_lever
     
     def run(self) -> bool:
+        """Run the complete collection process."""
         start_time = datetime.utcnow()
-        logging.info(f"🚀 Starting Greenhouse token collection {'(DRY RUN)' if self.dry_run else ''}")
+        logging.info(f"Starting ATS token collection {'(DRY RUN)' if self.dry_run else ''}")
         
-        total_tokens_processed = 0
-        total_new_discoveries = 0
+        total_greenhouse = 0
+        total_lever = 0
         
-        # Phase 1: Process known seed tokens
-        seed_tokens_processed = self.process_seed_tokens()
-        total_tokens_processed += seed_tokens_processed
-        logging.info(f"✅ Phase 1 Complete: Processed {seed_tokens_processed} seed tokens")
+        # Process seed tokens first
+        seed_gh, seed_lv = self.process_seed_tokens()
+        total_greenhouse += seed_gh
+        total_lever += seed_lv
+        logging.info(f"Processed {seed_gh} Greenhouse and {seed_lv} Lever seed tokens")
         
-        # Phase 2: Crawl seed URLs for new token discovery
+        # Crawl Fortune 500 URLs
+        fortune_urls = [url.strip() for url in 
+                       self.config.get('fortune_500_urls', 'urls', '').split('\n') if url.strip()]
+        
+        if fortune_urls:
+            logging.info(f"Crawling {len(fortune_urls)} Fortune 500 URLs")
+            for url in fortune_urls:
+                gh_found, lv_found = self.crawl_page(url)
+                total_greenhouse += gh_found
+                total_lever += lv_found
+                
+                delay = random.uniform(
+                    self.config.getint('scraping', 'min_delay', 10),
+                    self.config.getint('scraping', 'max_delay', 30)
+                )
+                time.sleep(delay)
+        
+        # Crawl discovery URLs
         seed_urls = [url.strip() for url in 
                     self.config.get('seed_urls', 'urls', '').split('\n') if url.strip()]
         
         if seed_urls:
-            logging.info(f"🔍 Phase 2: Crawling {len(seed_urls)} seed URLs for token discovery")
-            
-            for i, url in enumerate(seed_urls, 1):
-                tokens_found, new_tokens = self.crawl_page(url)
-                total_tokens_processed += tokens_found
-                total_new_discoveries += new_tokens
+            logging.info(f"Crawling {len(seed_urls)} discovery URLs")
+            for url in seed_urls:
+                gh_found, lv_found = self.crawl_page(url)
+                total_greenhouse += gh_found
+                total_lever += lv_found
                 
-                if tokens_found > 0:
-                    logging.info(f"📊 URL {i}/{len(seed_urls)}: Found {tokens_found} tokens ({new_tokens} new) from {url[:50]}...")
-                
-                # Add delay between pages
                 delay = random.uniform(
-                    self.config.getint('scraping', 'min_delay', 5),
-                    self.config.getint('scraping', 'max_delay', 15)
+                    self.config.getint('scraping', 'min_delay', 10),
+                    self.config.getint('scraping', 'max_delay', 30)
                 )
                 time.sleep(delay)
-            
-            logging.info(f"✅ Phase 2 Complete: Discovered {total_new_discoveries} new companies from URL crawling")
-        else:
-            logging.info("No seed URLs configured, skipping discovery crawling")
         
-        # Phase 3: Send enhanced email summary
+        # Send email summary if enabled
         if (self.email_reporter and 
             not self.dry_run and 
             self.config.getboolean('email', 'enabled', True)):
             
             recipient = os.getenv('EMAIL_RECIPIENT')
             if recipient:
-                tokens_data = self.db_manager.get_all_tokens()
-                trends_data = self.db_manager.get_monthly_trends()
-                self.email_reporter.send_summary(tokens_data, trends_data, recipient)
+                companies_data = self.db_manager.get_all_companies()
+                self._send_enhanced_summary(companies_data, recipient)
         
         end_time = datetime.utcnow()
         duration = (end_time - start_time).total_seconds()
         
-        # Final summary
-        with self.db_manager.get_connection() as conn:
-            cursor = conn.execute("SELECT COUNT(*) FROM greenhouse_tokens")
-            total_companies = cursor.fetchone()[0]
-            
-            cursor = conn.execute("SELECT SUM(job_count) FROM greenhouse_tokens")
-            total_jobs = cursor.fetchone()[0] or 0
-        
-        logging.info(f"🎉 Collection completed in {duration/60:.1f} minutes")
-        logging.info(f"📊 Final Stats: {total_companies:,} companies | {total_jobs:,} jobs | {total_new_discoveries} new discoveries")
+        logging.info(f"Collection completed in {duration:.2f} seconds. "
+                    f"Greenhouse: {total_greenhouse}, Lever: {total_lever}")
         
         return True
+    
+    def _send_enhanced_summary(self, companies_data: List[sqlite3.Row], recipient: str):
+        """Send enhanced email summary with both ATS systems."""
+        try:
+            if not companies_data:
+                body = "No companies collected yet."
+                html_body = "<p>No companies collected yet.</p>"
+            else:
+                body = self._format_enhanced_summary(companies_data)
+                html_body = self._format_enhanced_html_summary(companies_data)
+            
+            msg = MIMEMultipart('alternative')
+            msg["Subject"] = f"Multi-ATS Collection Report - {datetime.utcnow().strftime('%Y-%m-%d')}"
+            msg["From"] = os.getenv('SMTP_USER')
+            msg["To"] = recipient
+            
+            text_part = MIMEText(body, 'plain')
+            html_part = MIMEText(html_body, 'html')
+            
+            msg.attach(text_part)
+            msg.attach(html_part)
+            
+            smtp_server = self.config.get('email', 'smtp_server', 'smtp.gmail.com')
+            smtp_port = self.config.getint('email', 'smtp_port', 587)
+            
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(os.getenv('SMTP_USER'), os.getenv('SMTP_PASS'))
+                server.sendmail(os.getenv('SMTP_USER'), recipient, msg.as_string())
+            
+            logging.info("Enhanced email summary sent successfully")
+            
+        except Exception as e:
+            logging.error(f"Error sending enhanced email: {e}")
+    
+    def _format_enhanced_summary(self, companies_data: List[sqlite3.Row]) -> str:
+        """Format enhanced text summary."""
+        if not companies_data:
+            return "No companies collected yet."
+        
+        # Separate by ATS type
+        greenhouse_companies = [c for c in companies_data if c.get('ats_type') == 'greenhouse']
+        lever_companies = [c for c in companies_data if c.get('ats_type') == 'lever']
+        
+        # Calculate totals
+        total_jobs = sum(row.get('job_count', 0) or 0 for row in companies_data)
+        total_remote = sum(row.get('remote_jobs_count', 0) or 0 for row in companies_data)
+        total_hybrid = sum(row.get('hybrid_jobs_count', 0) or 0 for row in companies_data)
+        total_onsite = sum(row.get('onsite_jobs_count', 0) or 0 for row in companies_data)
+        
+        lines = [
+            f"Multi-ATS Collection Summary",
+            f"=" * 50,
+            f"Total Companies: {len(companies_data)}",
+            f"  Greenhouse: {len(greenhouse_companies)}",
+            f"  Lever: {len(lever_companies)}",
+            f"Total Jobs: {total_jobs}",
+            f"  Remote: {total_remote} ({total_remote/total_jobs*100:.1f}%)" if total_jobs > 0 else "  Remote: 0",
+            f"  Hybrid: {total_hybrid} ({total_hybrid/total_jobs*100:.1f}%)" if total_jobs > 0 else "  Hybrid: 0",
+            f"  On-site: {total_onsite} ({total_onsite/total_jobs*100:.1f}%)" if total_jobs > 0 else "  On-site: 0",
+            "",
+            "Company Details:",
+            "=" * 50
+        ]
+        
+        for row in companies_data:
+            ats_type = row.get('ats_type', 'unknown').upper()
+            remote_count = row.get('remote_jobs_count', 0) or 0
+            hybrid_count = row.get('hybrid_jobs_count', 0) or 0
+            onsite_count = row.get('onsite_jobs_count', 0) or 0
+            
+            lines.append(
+                f"[{ats_type}] {row.get('company_name', 'Unknown')} ({row.get('token', 'unknown')})\n"
+                f"  Total Jobs: {row.get('job_count', 0)}\n"
+                f"  Work Types: Remote {remote_count} | Hybrid {hybrid_count} | Onsite {onsite_count}\n"
+                f"  Locations: {row.get('locations', 'Not specified')}\n"
+                f"  Last seen: {row.get('last_seen', 'Unknown')}\n"
+                + "-" * 50
+            )
+        
+        return "\n".join(lines)
+    
+    def _format_enhanced_html_summary(self, companies_data: List[sqlite3.Row]) -> str:
+        """Format enhanced HTML summary."""
+        if not companies_data:
+            return "<p>No companies collected yet.</p>"
+        
+        # Calculate totals by ATS type
+        greenhouse_companies = [c for c in companies_data if c.get('ats_type') == 'greenhouse']
+        lever_companies = [c for c in companies_data if c.get('ats_type') == 'lever']
+        
+        total_jobs = sum(row.get('job_count', 0) or 0 for row in companies_data)
+        total_remote = sum(row.get('remote_jobs_count', 0) or 0 for row in companies_data)
+        total_hybrid = sum(row.get('hybrid_jobs_count', 0) or 0 for row in companies_data)
+        total_onsite = sum(row.get('onsite_jobs_count', 0) or 0 for row in companies_data)
+        
+        html = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif;">
+        <h2>Multi-ATS Collection Report - {datetime.utcnow().strftime('%Y-%m-%d')}</h2>
+        
+        <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+            <h3>Summary Statistics</h3>
+            <p><strong>Total Companies:</strong> {len(companies_data)}</p>
+            <div style="margin-left: 20px;">
+                <p><strong>Greenhouse:</strong> {len(greenhouse_companies)}</p>
+                <p><strong>Lever:</strong> {len(lever_companies)}</p>
+            </div>
+            <p><strong>Total Jobs:</strong> {total_jobs}</p>
+            <div style="margin-left: 20px;">
+                <p><strong>Remote:</strong> {total_remote} ({total_remote/total_jobs*100:.1f}%)</p>
+                <p><strong>Hybrid:</strong> {total_hybrid} ({total_hybrid/total_jobs*100:.1f}%)</p>
+                <p><strong>On-site:</strong> {total_onsite} ({total_onsite/total_jobs*100:.1f}%)</p>
+            </div>
+        </div>
+        
+        <table border="1" style="border-collapse: collapse; width: 100%;">
+        <tr style="background-color: #e0e0e0;">
+            <th>ATS Type</th>
+            <th>Company</th>
+            <th>Token</th>
+            <th>Total Jobs</th>
+            <th>Remote</th>
+            <th>Hybrid</th>
+            <th>On-site</th>
+            <th>Locations</th>
+            <th>Last Seen</th>
+        </tr>
+        """ if total_jobs > 0 else f"""
+        <html>
+        <body style="font-family: Arial, sans-serif;">
+        <h2>Multi-ATS Collection Report - {datetime.utcnow().strftime('%Y-%m-%d')}</h2>
+        
+        <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+            <h3>Summary Statistics</h3>
+            <p><strong>Total Companies:</strong> {len(companies_data)}</p>
+            <p><strong>Total Jobs:</strong> {total_jobs}</p>
+        </div>
+        
+        <table border="1" style="border-collapse: collapse; width: 100%;">
+        <tr style="background-color: #e0e0e0;">
+            <th>ATS Type</th>
+            <th>Company</th>
+            <th>Token</th>
+            <th>Total Jobs</th>
+            <th>Remote</th>
+            <th>Hybrid</th>
+            <th>On-site</th>
+            <th>Locations</th>
+            <th>Last Seen</th>
+        </tr>
+        """
+        
+        for row in companies_data:
+            ats_type = row.get('ats_type', 'unknown')
+            remote_count = row.get('remote_jobs_count', 0) or 0
+            hybrid_count = row.get('hybrid_jobs_count', 0) or 0
+            onsite_count = row.get('onsite_jobs_count', 0) or 0
+            
+            # Create appropriate URL based on ATS type
+            if ats_type == 'greenhouse':
+                job_board_url = f"https://boards.greenhouse.io/{row.get('token', '')}"
+            elif ats_type == 'lever':
+                job_board_url = f"https://jobs.lever.co/{row.get('token', '')}"
+            else:
+                job_board_url = "#"
+            
+            html += f"""
+            <tr>
+                <td><strong>{ats_type.upper()}</strong></td>
+                <td><strong>{row.get('company_name', 'Unknown')}</strong></td>
+                <td><a href="{job_board_url}" target="_blank">{row.get('token', '')}</a></td>
+                <td>{row.get('job_count', 0)}</td>
+                <td>{remote_count}</td>
+                <td>{hybrid_count}</td>
+                <td>{onsite_count}</td>
+                <td>{row.get('locations', 'Not specified')}</td>
+                <td>{row.get('last_seen', 'Unknown')}</td>
+            </tr>
+            """
+        
+        html += """
+        </table>
+        
+        <div style="margin-top: 20px; font-size: 12px; color: #666;">
+            <p><em>Click on any token to view the company's live job board.</em></p>
+        </div>
+        
+        </body>
+        </html>
+        """
+        return html
 
 
 def main():
+    """Main entry point."""
     import argparse
     
-    parser = argparse.ArgumentParser(description='Enhanced Greenhouse Token Collector')
+    parser = argparse.ArgumentParser(description='Enhanced Multi-ATS Collector')
+    parser.add_argument('--config', default='config.ini', help='Configuration file path')
     parser.add_argument('--dry-run', action='store_true', help='Run without making changes')
     parser.add_argument('--verbose', '-v', action='store_true', help='Verbose logging')
     
     args = parser.parse_args()
     
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
-    
     try:
-        collector = GreenhouseCollector(dry_run=args.dry_run)
+        collector = EnhancedATSCollector(args.config, args.dry_run)
         success = collector.run()
         return 0 if success else 1
     except Exception as e:
