@@ -1,103 +1,4 @@
-def _format_html_summary(self, tokens_data: List[sqlite3.Row]) -> str:
-        """Format HTML summary."""
-        if not tokens_data:
-            return "<p>No tokens collected yet.</p>"
-        
-        # Calculate totals
-        total_jobs = sum(row.get('job_count', 0) or 0 for row in tokens_data)
-        total_remote = sum(row.get('remote_jobs_count', 0) or 0 for row in tokens_data)
-        total_hybrid = sum(row.get('hybrid_jobs_count', 0) or 0 for row in tokens_data)
-        total_onsite = sum(row.get('onsite_jobs_count', 0) or 0 for row in tokens_data)
-        
-        html = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif;">
-        <h2>🔍 Greenhouse Tokens Report - {datetime.utcnow().strftime('%Y-%m-%d')}</h2>
-        
-        <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
-            <h3>📊 Summary Statistics</h3>
-            <p><strong>Total Companies:</strong> {len(tokens_data)}</p>
-            <p><strong>Total Jobs:</strong> {total_jobs}</p>
-            <div style="margin-left: 20px;">
-                <p>🏠 <strong>Remote:</strong> {total_remote} ({total_remote/total_jobs*100:.1f}%)</p>
-                <p>🏢 <strong>Hybrid:</strong> {total_hybrid} ({total_hybrid/total_jobs*100:.1f}%)</p>
-                <p>🏢 <strong>On-site:</strong> {total_onsite} ({total_onsite/total_jobs*100:.1f}%)</p>
-            </div>
-        </div>
-        
-        <table border="1" style="border-collapse: collapse; width: 100%;">
-        <tr style="background-color: #e0e0e0;">
-            <th>Company</th>
-            <th>Token</th>
-            <th>Total Jobs</th>
-            <th>🏠 Remote</th>
-            <th>🏢 Hybrid</th>
-            <th>🏢 On-site</th>
-            <th>Locations</th>
-            <th>Last Seen</th>
-        </tr>
-        """ if total_jobs > 0 else f"""
-        <html>
-        <body style="font-family: Arial, sans-serif;">
-        <h2>🔍 Greenhouse Tokens Report - {datetime.utcnow().strftime('%Y-%m-%d')}</h2>
-        
-        <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
-            <h3>📊 Summary Statistics</h3>
-            <p><strong>Total Companies:</strong> {len(tokens_data)}</p>
-            <p><strong>Total Jobs:</strong> {total_jobs}</p>
-        </div>
-        
-        <table border="1" style="border-collapse: collapse; width: 100%;">
-        <tr style="background-color: #e0e0e0;">
-            <th>Company</th>
-            <th>Token</th>
-            <th>Total Jobs</th>
-            <th>🏠 Remote</th>
-            <th>🏢 Hybrid</th>
-            <th>🏢 On-site</th>
-            <th>Locations</th>
-            <th>Last Seen</th>
-        </tr>
-        """
-        
-        for row in tokens_data:
-            remote_count = row.get('remote_jobs_count', 0) or 0
-            hybrid_count = row.get('hybrid_jobs_count', 0) or 0
-            onsite_count = row.get('onsite_jobs_count', 0) or 0
-            
-            html += f"""
-            <tr>
-                <td><strong>{row.get('company_name', 'Unknown')}</strong></td>
-                <td><a href="https://boards.greenhouse.io/{row.get('token', '')}" target="_blank">{row.get('token', '')}</a></td>
-                <td>{row.get('job_count', 0)}</td>
-                <td>{remote_count}</td>
-                <td>{hybrid_count}</td>
-                <td>{onsite_count}</td>
-                <td>{row.get('locations', 'Not specified')}</td>
-                <td>{row.get('last_seen', 'Unknown')}</td>
-            </tr>
-            """
-        
-        html += """
-        </table>
-        
-        <div style="margin-top: 20px; font-size: 12px; color: #666;">
-            <p><em>Click on any token to view the company's live job board on Greenhouse.</em></p>
-        </div>
-        
-        </body>
-        </html>
-        """
-        return html            conn.execute("""
-                CREATE TABLE IF NOT EXISTS crawl_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    url TEXT,
-                    tokens_found INTEGER,
-                    success BOOLEAN,
-                    error_message TEXT,
-                    crawl_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)"""
+"""
 Enhanced Greenhouse Metadata Collector
 --------------------------------------
 A robust, secure, and compliant system for collecting Greenhouse job board tokens
@@ -348,6 +249,9 @@ class DatabaseManager:
                     FOREIGN KEY (token) REFERENCES greenhouse_tokens (token)
                 )
             """)
+            
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS crawl_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     url TEXT,
                     tokens_found INTEGER,
@@ -886,33 +790,91 @@ class EmailReporter:
         if not tokens_data:
             return "<p>No tokens collected yet.</p>"
         
+        # Calculate totals
+        total_jobs = sum(row.get('job_count', 0) or 0 for row in tokens_data)
+        total_remote = sum(row.get('remote_jobs_count', 0) or 0 for row in tokens_data)
+        total_hybrid = sum(row.get('hybrid_jobs_count', 0) or 0 for row in tokens_data)
+        total_onsite = sum(row.get('onsite_jobs_count', 0) or 0 for row in tokens_data)
+        
         html = f"""
         <html>
-        <body>
-        <h2>Greenhouse Tokens Report - {datetime.utcnow().strftime('%Y-%m-%d')}</h2>
-        <p><strong>Total Companies:</strong> {len(tokens_data)}</p>
+        <body style="font-family: Arial, sans-serif;">
+        <h2>🔍 Greenhouse Tokens Report - {datetime.utcnow().strftime('%Y-%m-%d')}</h2>
+        
+        <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+            <h3>📊 Summary Statistics</h3>
+            <p><strong>Total Companies:</strong> {len(tokens_data)}</p>
+            <p><strong>Total Jobs:</strong> {total_jobs}</p>
+            <div style="margin-left: 20px;">
+                <p>🏠 <strong>Remote:</strong> {total_remote} ({total_remote/total_jobs*100:.1f}%)</p>
+                <p>🏢 <strong>Hybrid:</strong> {total_hybrid} ({total_hybrid/total_jobs*100:.1f}%)</p>
+                <p>🏢 <strong>On-site:</strong> {total_onsite} ({total_onsite/total_jobs*100:.1f}%)</p>
+            </div>
+        </div>
+        
         <table border="1" style="border-collapse: collapse; width: 100%;">
-        <tr>
+        <tr style="background-color: #e0e0e0;">
             <th>Company</th>
             <th>Token</th>
-            <th>Jobs</th>
+            <th>Total Jobs</th>
+            <th>🏠 Remote</th>
+            <th>🏢 Hybrid</th>
+            <th>🏢 On-site</th>
+            <th>Locations</th>
+            <th>Last Seen</th>
+        </tr>
+        """ if total_jobs > 0 else f"""
+        <html>
+        <body style="font-family: Arial, sans-serif;">
+        <h2>🔍 Greenhouse Tokens Report - {datetime.utcnow().strftime('%Y-%m-%d')}</h2>
+        
+        <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+            <h3>📊 Summary Statistics</h3>
+            <p><strong>Total Companies:</strong> {len(tokens_data)}</p>
+            <p><strong>Total Jobs:</strong> {total_jobs}</p>
+        </div>
+        
+        <table border="1" style="border-collapse: collapse; width: 100%;">
+        <tr style="background-color: #e0e0e0;">
+            <th>Company</th>
+            <th>Token</th>
+            <th>Total Jobs</th>
+            <th>🏠 Remote</th>
+            <th>🏢 Hybrid</th>
+            <th>🏢 On-site</th>
             <th>Locations</th>
             <th>Last Seen</th>
         </tr>
         """
         
         for row in tokens_data:
+            remote_count = row.get('remote_jobs_count', 0) or 0
+            hybrid_count = row.get('hybrid_jobs_count', 0) or 0
+            onsite_count = row.get('onsite_jobs_count', 0) or 0
+            
             html += f"""
             <tr>
-                <td>{row['company_name']}</td>
-                <td><a href="https://boards.greenhouse.io/{row['token']}">{row['token']}</a></td>
-                <td>{row['job_count']}</td>
-                <td>{row['locations'] or 'Not specified'}</td>
-                <td>{row['last_seen']}</td>
+                <td><strong>{row.get('company_name', 'Unknown')}</strong></td>
+                <td><a href="https://boards.greenhouse.io/{row.get('token', '')}" target="_blank">{row.get('token', '')}</a></td>
+                <td>{row.get('job_count', 0)}</td>
+                <td>{remote_count}</td>
+                <td>{hybrid_count}</td>
+                <td>{onsite_count}</td>
+                <td>{row.get('locations', 'Not specified')}</td>
+                <td>{row.get('last_seen', 'Unknown')}</td>
             </tr>
             """
         
-        html += "</table></body></html>"
+        html += """
+        </table>
+        
+        <div style="margin-top: 20px; font-size: 12px; color: #666;">
+            <p><em>Click on any token to view the company's live job board on Greenhouse.</em></p>
+        </div>
+        
+        </body>
+        </html>
+        """
         return html
 
 
@@ -972,6 +934,57 @@ class GreenhouseCollector:
         if missing_vars:
             logging.error(f"Missing required environment variables: {missing_vars}")
             raise ValueError(f"Missing required environment variables: {missing_vars}")
+    
+    def process_seed_tokens(self) -> int:
+        """Process known Greenhouse tokens directly."""
+        seed_tokens = [token.strip() for token in 
+                      self.config.get('seed_tokens', 'tokens', '').split(',') if token.strip()]
+        
+        if not seed_tokens:
+            logging.info("No seed tokens configured")
+            return 0
+        
+        logging.info(f"Processing {len(seed_tokens)} seed tokens")
+        total_processed = 0
+        
+        for token in seed_tokens:
+            if not TokenExtractor.validate_token(token):
+                logging.warning(f"Invalid token format: {token}")
+                continue
+                
+            if self.dry_run:
+                logging.info(f"[DRY RUN] Would process seed token: {token}")
+                total_processed += 1
+                continue
+            
+            try:
+                company_name, job_count, locations, departments, job_titles, work_type_counts, job_details = \
+                    self.board_parser.parse_board(token, self.config.getint('scraping', 'max_retries', 3))
+                
+                if company_name:
+                    success = self.db_manager.upsert_token(
+                        token, "seed_token", company_name, job_count, 
+                        locations, departments, job_titles, work_type_counts, job_details
+                    )
+                    if success:
+                        total_processed += 1
+                        logging.info(f"Processed seed token {token}: {company_name} ({job_count} jobs - "
+                                   f"🏠{work_type_counts.get('remote', 0)} 🏢{work_type_counts.get('hybrid', 0)} "
+                                   f"🏢{work_type_counts.get('onsite', 0)})")
+                else:
+                    logging.warning(f"Failed to parse seed token: {token}")
+                
+                # Respect rate limits
+                delay = random.uniform(
+                    self.config.getint('scraping', 'min_delay', 10),
+                    self.config.getint('scraping', 'max_delay', 30)
+                )
+                time.sleep(delay)
+                
+            except Exception as e:
+                logging.error(f"Error processing seed token {token}: {e}")
+        
+        return total_processed
     
     def crawl_page(self, url: str) -> int:
         """Crawl a single page for Greenhouse tokens."""
@@ -1039,57 +1052,6 @@ class GreenhouseCollector:
         
         return tokens_found
     
-    def process_seed_tokens(self) -> int:
-        """Process known Greenhouse tokens directly."""
-        seed_tokens = [token.strip() for token in 
-                      self.config.get('seed_tokens', 'tokens', '').split(',') if token.strip()]
-        
-        if not seed_tokens:
-            logging.info("No seed tokens configured")
-            return 0
-        
-        logging.info(f"Processing {len(seed_tokens)} seed tokens")
-        total_processed = 0
-        
-        for token in seed_tokens:
-            if not TokenExtractor.validate_token(token):
-                logging.warning(f"Invalid token format: {token}")
-                continue
-                
-            if self.dry_run:
-                logging.info(f"[DRY RUN] Would process seed token: {token}")
-                total_processed += 1
-                continue
-            
-            try:
-                company_name, job_count, locations, departments, job_titles, work_type_counts, job_details = \
-                    self.board_parser.parse_board(token, self.config.getint('scraping', 'max_retries', 3))
-                
-                if company_name:
-                    success = self.db_manager.upsert_token(
-                        token, "seed_token", company_name, job_count, 
-                        locations, departments, job_titles, work_type_counts, job_details
-                    )
-                    if success:
-                        total_processed += 1
-                        logging.info(f"Processed seed token {token}: {company_name} ({job_count} jobs - "
-                                   f"🏠{work_type_counts.get('remote', 0)} 🏢{work_type_counts.get('hybrid', 0)} "
-                                   f"🏢{work_type_counts.get('onsite', 0)})")
-                else:
-                    logging.warning(f"Failed to parse seed token: {token}")
-                
-                # Respect rate limits
-                delay = random.uniform(
-                    self.config.getint('scraping', 'min_delay', 10),
-                    self.config.getint('scraping', 'max_delay', 30)
-                )
-                time.sleep(delay)
-                
-            except Exception as e:
-                logging.error(f"Error processing seed token {token}: {e}")
-        
-        return total_processed
-
     def run(self) -> bool:
         """Run the complete collection process."""
         start_time = datetime.utcnow()
