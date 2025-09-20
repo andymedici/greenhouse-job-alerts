@@ -786,7 +786,7 @@ class EmailReporter:
         return "\n".join(lines)
     
     def _format_html_summary(self, tokens_data: List[sqlite3.Row]) -> str:
-    """Format HTML summary."""
+        """Format HTML summary."""
     if not tokens_data:
         return "<p>No tokens collected yet.</p>"
     
