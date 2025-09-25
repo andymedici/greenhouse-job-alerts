@@ -1738,7 +1738,7 @@ class OptimizedATSDiscoverer:
         return False
 
 
-class OptimizedATSCollector:
+class EnhancedATSCollector:
     """Optimized multi-ATS collector with phased discovery approach."""
     
     def __init__(self, config_file: str = "config.ini", dry_run: bool = False):
